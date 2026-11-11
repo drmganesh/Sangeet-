@@ -1,0 +1,6 @@
+{
+  "name": "SANGEET",
+  "description": "Premium offline music and video player with 15-band graphic equalizer and 360° rotating spatial audio",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
