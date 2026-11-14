@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Bundle
@@ -40,6 +41,7 @@ import com.example.sangeet.data.model.VideoTrack
 import com.example.sangeet.data.repository.MediaRepository
 import com.example.sangeet.data.repository.SettingsRepository
 import com.example.sangeet.playback.PlaybackManager
+import com.example.sangeet.playback.PlaybackService
 import com.example.sangeet.ui.components.MiniPlayer
 import com.example.sangeet.ui.screens.*
 import com.example.sangeet.ui.screens.player.PlayerContainer
@@ -61,6 +63,7 @@ sealed class SubScreen {
     data object Equalizer : SubScreen()
     data object SpatialAudio : SubScreen()
     data object HomeNavSettings : SubScreen()
+    data object NotificationSettings : SubScreen()
     data class BlacklistWhitelist(val initialTab: Int = 0) : SubScreen()
     data class VideoPlayer(val video: VideoTrack) : SubScreen()
 }
@@ -69,6 +72,7 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var playbackManager: PlaybackManager
     private lateinit var mediaRepository: MediaRepository
+    private var openPlayerSignal by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -77,6 +81,10 @@ class MainActivity : ComponentActivity() {
         playbackManager = PlaybackManager.getInstance(applicationContext)
         mediaRepository = MediaRepository(applicationContext)
         val settingsRepository = SettingsRepository.getInstance(applicationContext)
+
+        if (intent?.getBooleanExtra(PlaybackService.EXTRA_OPEN_PLAYER, false) == true) {
+            openPlayerSignal++
+        }
 
         setContent {
             val themeMode by settingsRepository.themeMode.collectAsState(initial = ThemeMode.AMOLED)
@@ -95,9 +103,18 @@ class MainActivity : ComponentActivity() {
                     accentColor = accentColor,
                     onAccentColorChanged = { newAccent ->
                         scope.launch { settingsRepository.setAccentColor(newAccent) }
-                    }
+                    },
+                    openPlayerSignal = openPlayerSignal
                 )
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(PlaybackService.EXTRA_OPEN_PLAYER, false)) {
+            openPlayerSignal++
         }
     }
 }
@@ -110,7 +127,8 @@ fun SangeetApp(
     themeMode: ThemeMode,
     onThemeModeChanged: (ThemeMode) -> Unit,
     accentColor: AccentColor,
-    onAccentColorChanged: (AccentColor) -> Unit
+    onAccentColorChanged: (AccentColor) -> Unit,
+    openPlayerSignal: Int = 0
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -126,6 +144,13 @@ fun SangeetApp(
     var currentTab by remember { mutableStateOf(MainNavTab.HOME) }
     var currentSubScreen by remember { mutableStateOf<SubScreen>(SubScreen.None) }
     var isPlayerExpanded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(openPlayerSignal) {
+        if (openPlayerSignal > 0 && playbackManager.currentTrack.value != null) {
+            currentSubScreen = SubScreen.None
+            isPlayerExpanded = true
+        }
+    }
 
     // Start Screen Restoration on launch
     var hasAppliedStartScreen by rememberSaveable { mutableStateOf(false) }
@@ -397,6 +422,7 @@ fun SangeetApp(
                     onNavigateToEqualizer = { currentSubScreen = SubScreen.Equalizer },
                     onNavigateToSpatial = { currentSubScreen = SubScreen.SpatialAudio },
                     onNavigateToHomeNavSettings = { currentSubScreen = SubScreen.HomeNavSettings },
+                    onNavigateToNotificationSettings = { currentSubScreen = SubScreen.NotificationSettings },
                     onNavigateToBlacklistWhitelist = { tab -> currentSubScreen = SubScreen.BlacklistWhitelist(tab) }
                 )
             }
@@ -432,6 +458,17 @@ fun SangeetApp(
                 exit = slideOutVertically { it }
             ) {
                 HomeNavSettingsScreen(
+                    onNavigateBack = { currentSubScreen = SubScreen.None }
+                )
+            }
+
+            AnimatedVisibility(
+                visible = currentSubScreen is SubScreen.NotificationSettings,
+                enter = slideInVertically { it },
+                exit = slideOutVertically { it }
+            ) {
+                NotificationSettingsScreen(
+                    playbackManager = playbackManager,
                     onNavigateBack = { currentSubScreen = SubScreen.None }
                 )
             }

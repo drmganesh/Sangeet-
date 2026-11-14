@@ -7,12 +7,14 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.media3.common.*
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.session.MediaSession
 import com.example.sangeet.data.local.AppDatabase
 import com.example.sangeet.data.model.*
 import com.example.sangeet.data.repository.SettingsRepository
@@ -96,6 +98,8 @@ class PlaybackManager private constructor(private val context: Context) {
                     .build(),
                 true // handleAudioFocus
             )
+            .setSeekBackIncrementMs(10_000L)
+            .setSeekForwardIncrementMs(10_000L)
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_LOCAL)
             .build()
@@ -104,6 +108,7 @@ class PlaybackManager private constructor(private val context: Context) {
         startProgressUpdater()
         restorePersistedSettings()
         observeRuleChanges()
+        restoreLastPlaybackSessionIfEmpty()
     }
 
     private fun observeRuleChanges() {
@@ -216,6 +221,11 @@ class PlaybackManager private constructor(private val context: Context) {
         }
     }
 
+    fun findTrackById(trackId: Long): AudioTrack? {
+        return _currentTrack.value?.takeIf { it.id == trackId }
+            ?: _queue.value.find { it.id == trackId }
+    }
+
     fun getPlayer(): ExoPlayer = exoPlayer
 
     private fun setupPlayerListeners() {
@@ -224,6 +234,8 @@ class PlaybackManager private constructor(private val context: Context) {
                 _isPlaying.value = isPlaying
                 if (isPlaying) {
                     startPlaybackService()
+                } else {
+                    persistCurrentPlaybackSnapshot()
                 }
             }
 
@@ -245,6 +257,7 @@ class PlaybackManager private constructor(private val context: Context) {
 
                     if (track != null) {
                         recordPlayHistory(track)
+                        persistCurrentPlaybackSnapshot()
                     }
                 } else {
                     _currentTrack.value = null
@@ -256,14 +269,103 @@ class PlaybackManager private constructor(private val context: Context) {
     private fun startProgressUpdater() {
         progressUpdateJob?.cancel()
         progressUpdateJob = applicationScope.launch {
+            var tickCount = 0
             while (isActive) {
                 if (exoPlayer.isPlaying) {
                     _currentPositionMs.value = exoPlayer.currentPosition.coerceAtLeast(0L)
                     _durationMs.value = exoPlayer.duration.coerceAtLeast(0L)
+                    tickCount++
+                    if (tickCount % 20 == 0) { // Every ~5 seconds persist position for resumption
+                        persistCurrentPlaybackSnapshot()
+                    }
                 }
                 delay(250L)
             }
         }
+    }
+
+    private fun persistCurrentPlaybackSnapshot() {
+        val current = _currentTrack.value ?: return
+        val queueIds = _queue.value.map { it.id }
+        val pos = exoPlayer.currentPosition.coerceAtLeast(0L)
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.saveLastPlaybackSession(current.id, queueIds, pos)
+        }
+    }
+
+    private fun restoreLastPlaybackSessionIfEmpty() {
+        applicationScope.launch(Dispatchers.IO) {
+            try {
+                val session = settingsRepository.getLastPlaybackSession() ?: return@launch
+                val bl = db.blacklistDao().getAllBlacklist().first()
+                val wl = db.whitelistDao().getAllWhitelist().first()
+                val fr = db.folderRuleDao().getAllFolderRules().first()
+                cachedBlacklist = bl
+                cachedWhitelist = wl
+                cachedFolderRules = fr
+
+                val allTracks = db.audioTrackDao().getAllTracksSync()
+                val allowedById = RuleFilterEngine.filterAudioTracks(allTracks, bl, wl, fr)
+                    .associateBy { it.id }
+
+                val restoredQueue = session.queueIds.mapNotNull { allowedById[it] }
+                    .ifEmpty { listOfNotNull(allowedById[session.trackId]) }
+                if (restoredQueue.isEmpty()) return@launch
+
+                val startIndex = restoredQueue.indexOfFirst { it.id == session.trackId }.coerceAtLeast(0)
+                val targetTrack = restoredQueue[startIndex]
+
+                withContext(Dispatchers.Main) {
+                    if (_currentTrack.value != null || exoPlayer.mediaItemCount > 0) return@withContext
+                    _queue.value = restoredQueue
+                    _currentTrack.value = targetTrack
+                    val items = restoredQueue.map { buildMediaItem(it) }
+                    exoPlayer.setMediaItems(items, startIndex, session.positionMs.coerceAtLeast(0L))
+                    exoPlayer.prepare()
+                    exoPlayer.pause()
+                    _currentPositionMs.value = session.positionMs.coerceAtLeast(0L)
+                    _durationMs.value = targetTrack.durationMs
+                }
+            } catch (e: Exception) {
+                Log.d("PlaybackManager", "Skipped session restore: ${e.message}")
+            }
+        }
+    }
+
+    suspend fun loadResumableMediaItemsWithStartPosition(): MediaSession.MediaItemsWithStartPosition? {
+        val currentQueue = _queue.value
+        if (currentQueue.isNotEmpty()) {
+            val idx = exoPlayer.currentMediaItemIndex.coerceIn(0, currentQueue.lastIndex)
+            val pos = exoPlayer.currentPosition.coerceAtLeast(0L)
+            return MediaSession.MediaItemsWithStartPosition(
+                currentQueue.map { buildMediaItem(it) },
+                idx,
+                pos
+            )
+        }
+
+        val session = withContext(Dispatchers.IO) { settingsRepository.getLastPlaybackSession() } ?: return null
+        val loaded = withContext(Dispatchers.IO) {
+            val bl = db.blacklistDao().getAllBlacklist().first()
+            val wl = db.whitelistDao().getAllWhitelist().first()
+            val fr = db.folderRuleDao().getAllFolderRules().first()
+            val allTracks = db.audioTrackDao().getAllTracksSync()
+            val allowedById = RuleFilterEngine.filterAudioTracks(allTracks, bl, wl, fr)
+                .associateBy { it.id }
+            val restoredQueue = session.queueIds.mapNotNull { allowedById[it] }
+                .ifEmpty { listOfNotNull(allowedById[session.trackId]) }
+            restoredQueue
+        }
+        if (loaded.isEmpty()) return null
+
+        val startIndex = loaded.indexOfFirst { it.id == session.trackId }.coerceAtLeast(0)
+        _queue.value = loaded
+        _currentTrack.value = loaded[startIndex]
+        return MediaSession.MediaItemsWithStartPosition(
+            loaded.map { buildMediaItem(it) },
+            startIndex,
+            session.positionMs.coerceAtLeast(0L)
+        )
     }
 
     private fun recordPlayHistory(track: AudioTrack) {
@@ -283,11 +385,33 @@ class PlaybackManager private constructor(private val context: Context) {
 
     private fun startPlaybackService() {
         try {
-            val intent = Intent(context, PlaybackService::class.java)
-            context.startService(intent)
+            val intent = Intent(context, PlaybackService::class.java).apply {
+                putExtra(PlaybackService.EXTRA_START_FOREGROUND, true)
+            }
+            ContextCompat.startForegroundService(context, intent)
         } catch (e: Exception) {
-            Log.e("PlaybackManager", "Failed to start PlaybackService", e)
+            Log.e("PlaybackManager", "Foreground service start fallback: ${e.message}")
+            try {
+                context.startService(Intent(context, PlaybackService::class.java))
+            } catch (_: Exception) {}
         }
+    }
+
+    private fun buildMediaItem(t: AudioTrack): MediaItem {
+        val uri = if (t.contentUri.isNotBlank()) Uri.parse(t.contentUri) else Uri.parse(t.path)
+        return MediaItem.Builder()
+            .setMediaId(t.id.toString())
+            .setUri(uri)
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle(t.title)
+                    .setDisplayTitle(t.title)
+                    .setArtist(t.artist)
+                    .setAlbumTitle(t.album)
+                    .setArtworkUri(NotificationArtworkHelper.buildArtUri(t.id))
+                    .build()
+            )
+            .build()
     }
 
     fun playTrack(track: AudioTrack, trackList: List<AudioTrack> = listOf(track)) {
@@ -302,24 +426,12 @@ class PlaybackManager private constructor(private val context: Context) {
         _currentTrack.value = selected
 
         exoPlayer.clearMediaItems()
-        val mediaItems = allowedQueue.map { t ->
-            val uri = if (t.contentUri.isNotBlank()) Uri.parse(t.contentUri) else Uri.parse(t.path)
-            MediaItem.Builder()
-                .setMediaId(t.id.toString())
-                .setUri(uri)
-                .setMediaMetadata(
-                    MediaMetadata.Builder()
-                        .setTitle(t.title)
-                        .setArtist(t.artist)
-                        .setAlbumTitle(t.album)
-                        .build()
-                )
-                .build()
-        }
+        val mediaItems = allowedQueue.map { buildMediaItem(it) }
 
         exoPlayer.setMediaItems(mediaItems, index, 0L)
         exoPlayer.prepare()
         exoPlayer.play()
+        persistCurrentPlaybackSnapshot()
     }
 
     fun togglePlayPause() {
@@ -333,9 +445,44 @@ class PlaybackManager private constructor(private val context: Context) {
         }
     }
 
+    fun pause() {
+        if (exoPlayer.isPlaying) {
+            exoPlayer.pause()
+        }
+    }
+
     fun seekTo(positionMs: Long) {
         exoPlayer.seekTo(positionMs)
         _currentPositionMs.value = positionMs
+    }
+
+    fun seekBackward(incrementMs: Long = 10_000L) {
+        val target = (exoPlayer.currentPosition - incrementMs).coerceAtLeast(0L)
+        seekTo(target)
+    }
+
+    fun seekForward(incrementMs: Long = 10_000L) {
+        val dur = exoPlayer.duration.takeIf { it > 0L } ?: Long.MAX_VALUE
+        val target = (exoPlayer.currentPosition + incrementMs).coerceAtMost(dur)
+        seekTo(target)
+    }
+
+    fun stopPlaybackAndDismiss() {
+        val service = PlaybackService.activeServiceInstance
+        if (service != null) {
+            service.stopAndDismissNotification()
+        } else {
+            stopAndResetFromNotification()
+        }
+    }
+
+    fun stopAndResetFromNotification() {
+        persistCurrentPlaybackSnapshot()
+        cancelSleepTimer()
+        exoPlayer.playWhenReady = false
+        exoPlayer.pause()
+        exoPlayer.stop()
+        _isPlaying.value = false
     }
 
     fun skipToNext() {
@@ -568,19 +715,7 @@ class PlaybackManager private constructor(private val context: Context) {
         currentList.add(track)
         _queue.value = currentList
 
-        val uri = if (track.contentUri.isNotBlank()) Uri.parse(track.contentUri) else Uri.parse(track.path)
-        val item = MediaItem.Builder()
-            .setMediaId(track.id.toString())
-            .setUri(uri)
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(track.title)
-                    .setArtist(track.artist)
-                    .setAlbumTitle(track.album)
-                    .build()
-            )
-            .build()
-        exoPlayer.addMediaItem(item)
+        exoPlayer.addMediaItem(buildMediaItem(track))
     }
 
     fun playNextInQueue(track: AudioTrack) {
@@ -594,19 +729,7 @@ class PlaybackManager private constructor(private val context: Context) {
         currentList.add(targetIdx, track)
         _queue.value = currentList
 
-        val uri = if (track.contentUri.isNotBlank()) Uri.parse(track.contentUri) else Uri.parse(track.path)
-        val item = MediaItem.Builder()
-            .setMediaId(track.id.toString())
-            .setUri(uri)
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(track.title)
-                    .setArtist(track.artist)
-                    .setAlbumTitle(track.album)
-                    .build()
-            )
-            .build()
-        exoPlayer.addMediaItem(targetIdx, item)
+        exoPlayer.addMediaItem(targetIdx, buildMediaItem(track))
     }
 
     private fun handleTrackEnded() {

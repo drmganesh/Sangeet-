@@ -34,6 +34,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import com.example.sangeet.data.model.VideoTrack
 import com.example.sangeet.data.repository.MediaRepository
+import com.example.sangeet.playback.PlaybackManager
 import com.example.sangeet.ui.screens.player.formatMs
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -49,6 +50,10 @@ fun VideoPlayerScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+
+    LaunchedEffect(video.id) {
+        PlaybackManager.getInstance(context).pause()
+    }
 
     var isPlaying by remember { mutableStateOf(true) }
     var currentPosMs by remember { mutableLongStateOf(video.watchProgressMs) }

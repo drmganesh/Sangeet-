@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">SANGEET</string>
+    <string name="playback_channel_name">Now Playing</string>
+    <string name="playback_channel_description">Rich offline playback notification, album artwork, and lock screen controls</string>
 </resources>

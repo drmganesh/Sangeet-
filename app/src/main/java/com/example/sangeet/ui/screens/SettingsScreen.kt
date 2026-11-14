@@ -26,6 +26,7 @@ import com.example.sangeet.data.model.PlayerStyle
 import com.example.sangeet.data.model.RuleListKind
 import com.example.sangeet.data.model.RuleStatus
 import com.example.sangeet.data.repository.MediaRepository
+import com.example.sangeet.data.repository.NotificationPreferencesSnapshot
 import com.example.sangeet.data.repository.SettingsRepository
 import com.example.sangeet.playback.PlaybackManager
 import com.example.ui.theme.AccentColor
@@ -44,6 +45,7 @@ fun SettingsScreen(
     onNavigateToEqualizer: () -> Unit,
     onNavigateToSpatial: () -> Unit,
     onNavigateToHomeNavSettings: () -> Unit,
+    onNavigateToNotificationSettings: () -> Unit,
     onNavigateToBlacklistWhitelist: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -65,6 +67,7 @@ fun SettingsScreen(
     val crossfadeSec by settingsRepo.crossfadeSeconds.collectAsState(initial = 0)
     val gaplessEnabled by settingsRepo.gaplessPlayback.collectAsState(initial = true)
     val artworkPriority by settingsRepo.artworkPriority.collectAsState(initial = "EMBEDDED_FIRST")
+    val notifPrefs by settingsRepo.notificationPreferences.collectAsState(initial = NotificationPreferencesSnapshot())
 
     var showClearHistoryDialog by remember { mutableStateOf(false) }
     var showSleepTimerDialog by remember { mutableStateOf(false) }
@@ -252,6 +255,27 @@ fun SettingsScreen(
                         modifier = Modifier
                             .clickable { onNavigateToHomeNavSettings() }
                             .testTag("settings_home_nav_btn")
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+                    ListItem(
+                        headlineContent = { Text("Now Playing Notification") },
+                        supportingContent = {
+                            val summary = if (notifPrefs.customizationEnabled) {
+                                "${notifPrefs.privacyMode.label} • ${notifPrefs.artworkSize.label} art • Lock screen: ${notifPrefs.lockScreenMode.label}"
+                            } else {
+                                "Standard notification layout active"
+                            }
+                            Text(summary)
+                        },
+                        leadingContent = {
+                            Icon(Icons.Rounded.NotificationsActive, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        },
+                        trailingContent = {
+                            Icon(Icons.Rounded.ChevronRight, contentDescription = null)
+                        },
+                        modifier = Modifier
+                            .clickable { onNavigateToNotificationSettings() }
+                            .testTag("settings_notification_btn")
                     )
                 }
             }

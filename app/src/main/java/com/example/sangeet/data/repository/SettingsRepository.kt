@@ -15,6 +15,48 @@ import java.io.IOException
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "sangeet_preferences")
 
+enum class NotificationArtworkSize(val label: String, val pixelSize: Int) {
+    SMALL("Small", 256),
+    MEDIUM("Medium", 384),
+    LARGE("Large", 512)
+}
+
+enum class LockScreenMediaMode(val label: String, val description: String) {
+    FULL("Full", "Show artwork, title, artist, album, and controls"),
+    BASIC("Basic", "Show title and controls only"),
+    HIDDEN("Hidden", "Hide media info on lock screen")
+}
+
+enum class NotificationPrivacyMode(val label: String, val description: String) {
+    PUBLIC("Public", "Display media details normally everywhere"),
+    HIDE_SENSITIVE("Hide Sensitive", "Redact track details on lock screen"),
+    PRIVATE("Private", "Mask track details across notification shade")
+}
+
+data class NotificationPreferencesSnapshot(
+    val customizationEnabled: Boolean = true,
+    val showArtwork: Boolean = true,
+    val showArtist: Boolean = true,
+    val showAlbum: Boolean = true,
+    val showProgress: Boolean = true,
+    val showPrevNext: Boolean = true,
+    val showSeekButtons: Boolean = true,
+    val showStopButton: Boolean = true,
+    val artworkSize: NotificationArtworkSize = NotificationArtworkSize.LARGE,
+    val lockScreenMode: LockScreenMediaMode = LockScreenMediaMode.FULL,
+    val privacyMode: NotificationPrivacyMode = NotificationPrivacyMode.PUBLIC
+) {
+    fun effective(): NotificationPreferencesSnapshot {
+        return if (customizationEnabled) this else NotificationPreferencesSnapshot(customizationEnabled = false)
+    }
+}
+
+data class LastPlaybackSession(
+    val trackId: Long,
+    val queueIds: List<Long>,
+    val positionMs: Long
+)
+
 class SettingsRepository(private val context: Context) {
 
     private val dataStore = context.dataStore
@@ -79,6 +121,24 @@ class SettingsRepository(private val context: Context) {
         val KEY_TAB_NAMES_MODE = stringPreferencesKey("tab_names_mode")
         val KEY_HIDE_NAV_WHILE_SCROLLING = booleanPreferencesKey("hide_nav_while_scrolling")
         val KEY_ROTATE_WITH_DEVICE = booleanPreferencesKey("rotate_with_device")
+
+        // Now Playing Notification Settings
+        val KEY_NOTIF_CUSTOMIZATION_ENABLED = booleanPreferencesKey("notif_customization_enabled")
+        val KEY_NOTIF_SHOW_ARTWORK = booleanPreferencesKey("notif_show_artwork")
+        val KEY_NOTIF_SHOW_ARTIST = booleanPreferencesKey("notif_show_artist")
+        val KEY_NOTIF_SHOW_ALBUM = booleanPreferencesKey("notif_show_album")
+        val KEY_NOTIF_SHOW_PROGRESS = booleanPreferencesKey("notif_show_progress")
+        val KEY_NOTIF_SHOW_PREV_NEXT = booleanPreferencesKey("notif_show_prev_next")
+        val KEY_NOTIF_SHOW_SEEK = booleanPreferencesKey("notif_show_seek")
+        val KEY_NOTIF_SHOW_STOP = booleanPreferencesKey("notif_show_stop")
+        val KEY_NOTIF_ARTWORK_SIZE = stringPreferencesKey("notif_artwork_size")
+        val KEY_NOTIF_LOCKSCREEN_MODE = stringPreferencesKey("notif_lockscreen_mode")
+        val KEY_NOTIF_PRIVACY_MODE = stringPreferencesKey("notif_privacy_mode")
+
+        // Last Playback Session (for Process Recreation & Media Resumption)
+        val KEY_LAST_PLAYBACK_TRACK_ID = longPreferencesKey("last_playback_track_id")
+        val KEY_LAST_PLAYBACK_QUEUE_IDS = stringPreferencesKey("last_playback_queue_ids")
+        val KEY_LAST_PLAYBACK_POSITION_MS = longPreferencesKey("last_playback_position_ms")
 
         @Volatile
         private var INSTANCE: SettingsRepository? = null
@@ -176,6 +236,33 @@ class SettingsRepository(private val context: Context) {
     val tabNamesMode: Flow<String> = safePreferences.map { it[KEY_TAB_NAMES_MODE] ?: "AUTO" }
     val hideNavWhileScrolling: Flow<Boolean> = safePreferences.map { it[KEY_HIDE_NAV_WHILE_SCROLLING] ?: false }
     val rotateWithDevice: Flow<Boolean> = safePreferences.map { it[KEY_ROTATE_WITH_DEVICE] ?: false }
+
+    // --- Now Playing Notification Flows ---
+    val notificationPreferences: Flow<NotificationPreferencesSnapshot> = safePreferences.map { prefs ->
+        val artSize = prefs[KEY_NOTIF_ARTWORK_SIZE]?.let {
+            try { NotificationArtworkSize.valueOf(it) } catch (_: Exception) { NotificationArtworkSize.LARGE }
+        } ?: NotificationArtworkSize.LARGE
+        val lockMode = prefs[KEY_NOTIF_LOCKSCREEN_MODE]?.let {
+            try { LockScreenMediaMode.valueOf(it) } catch (_: Exception) { LockScreenMediaMode.FULL }
+        } ?: LockScreenMediaMode.FULL
+        val privacy = prefs[KEY_NOTIF_PRIVACY_MODE]?.let {
+            try { NotificationPrivacyMode.valueOf(it) } catch (_: Exception) { NotificationPrivacyMode.PUBLIC }
+        } ?: NotificationPrivacyMode.PUBLIC
+
+        NotificationPreferencesSnapshot(
+            customizationEnabled = prefs[KEY_NOTIF_CUSTOMIZATION_ENABLED] ?: true,
+            showArtwork = prefs[KEY_NOTIF_SHOW_ARTWORK] ?: true,
+            showArtist = prefs[KEY_NOTIF_SHOW_ARTIST] ?: true,
+            showAlbum = prefs[KEY_NOTIF_SHOW_ALBUM] ?: true,
+            showProgress = prefs[KEY_NOTIF_SHOW_PROGRESS] ?: true,
+            showPrevNext = prefs[KEY_NOTIF_SHOW_PREV_NEXT] ?: true,
+            showSeekButtons = prefs[KEY_NOTIF_SHOW_SEEK] ?: true,
+            showStopButton = prefs[KEY_NOTIF_SHOW_STOP] ?: true,
+            artworkSize = artSize,
+            lockScreenMode = lockMode,
+            privacyMode = privacy
+        )
+    }.distinctUntilChanged()
 
     // --- Persistence Mutations (All Safe & Asynchronous) ---
 
@@ -367,6 +454,98 @@ class SettingsRepository(private val context: Context) {
             it.remove(KEY_TAB_NAMES_MODE)
             it.remove(KEY_HIDE_NAV_WHILE_SCROLLING)
             it.remove(KEY_ROTATE_WITH_DEVICE)
+        }
+    }
+
+    // --- Now Playing Notification Mutations ---
+
+    suspend fun setNotificationCustomizationEnabled(enabled: Boolean) {
+        dataStore.edit { it[KEY_NOTIF_CUSTOMIZATION_ENABLED] = enabled }
+    }
+
+    suspend fun setNotificationShowArtwork(enabled: Boolean) {
+        dataStore.edit { it[KEY_NOTIF_SHOW_ARTWORK] = enabled }
+    }
+
+    suspend fun setNotificationShowArtist(enabled: Boolean) {
+        dataStore.edit { it[KEY_NOTIF_SHOW_ARTIST] = enabled }
+    }
+
+    suspend fun setNotificationShowAlbum(enabled: Boolean) {
+        dataStore.edit { it[KEY_NOTIF_SHOW_ALBUM] = enabled }
+    }
+
+    suspend fun setNotificationShowProgress(enabled: Boolean) {
+        dataStore.edit { it[KEY_NOTIF_SHOW_PROGRESS] = enabled }
+    }
+
+    suspend fun setNotificationShowPrevNext(enabled: Boolean) {
+        dataStore.edit { it[KEY_NOTIF_SHOW_PREV_NEXT] = enabled }
+    }
+
+    suspend fun setNotificationShowSeek(enabled: Boolean) {
+        dataStore.edit { it[KEY_NOTIF_SHOW_SEEK] = enabled }
+    }
+
+    suspend fun setNotificationShowStop(enabled: Boolean) {
+        dataStore.edit { it[KEY_NOTIF_SHOW_STOP] = enabled }
+    }
+
+    suspend fun setNotificationArtworkSize(size: NotificationArtworkSize) {
+        dataStore.edit { it[KEY_NOTIF_ARTWORK_SIZE] = size.name }
+    }
+
+    suspend fun setNotificationLockScreenMode(mode: LockScreenMediaMode) {
+        dataStore.edit { it[KEY_NOTIF_LOCKSCREEN_MODE] = mode.name }
+    }
+
+    suspend fun setNotificationPrivacyMode(mode: NotificationPrivacyMode) {
+        dataStore.edit { it[KEY_NOTIF_PRIVACY_MODE] = mode.name }
+    }
+
+    suspend fun resetNotificationSettingsToDefault() {
+        dataStore.edit {
+            it.remove(KEY_NOTIF_CUSTOMIZATION_ENABLED)
+            it.remove(KEY_NOTIF_SHOW_ARTWORK)
+            it.remove(KEY_NOTIF_SHOW_ARTIST)
+            it.remove(KEY_NOTIF_SHOW_ALBUM)
+            it.remove(KEY_NOTIF_SHOW_PROGRESS)
+            it.remove(KEY_NOTIF_SHOW_PREV_NEXT)
+            it.remove(KEY_NOTIF_SHOW_SEEK)
+            it.remove(KEY_NOTIF_SHOW_STOP)
+            it.remove(KEY_NOTIF_ARTWORK_SIZE)
+            it.remove(KEY_NOTIF_LOCKSCREEN_MODE)
+            it.remove(KEY_NOTIF_PRIVACY_MODE)
+        }
+    }
+
+    // --- Last Playback Session Persistence ---
+
+    suspend fun saveLastPlaybackSession(trackId: Long, queueIds: List<Long>, positionMs: Long) {
+        val serializedQueue = queueIds.take(500).joinToString(",")
+        dataStore.edit {
+            it[KEY_LAST_PLAYBACK_TRACK_ID] = trackId
+            it[KEY_LAST_PLAYBACK_QUEUE_IDS] = serializedQueue
+            it[KEY_LAST_PLAYBACK_POSITION_MS] = positionMs.coerceAtLeast(0L)
+        }
+    }
+
+    suspend fun getLastPlaybackSession(): LastPlaybackSession? {
+        val prefs = safePreferences.first()
+        val trackId = prefs[KEY_LAST_PLAYBACK_TRACK_ID] ?: return null
+        val queueIds = prefs[KEY_LAST_PLAYBACK_QUEUE_IDS]
+            ?.split(",")
+            ?.mapNotNull { it.toLongOrNull() }
+            ?: emptyList()
+        val positionMs = (prefs[KEY_LAST_PLAYBACK_POSITION_MS] ?: 0L).coerceAtLeast(0L)
+        return LastPlaybackSession(trackId = trackId, queueIds = queueIds, positionMs = positionMs)
+    }
+
+    suspend fun clearLastPlaybackSession() {
+        dataStore.edit {
+            it.remove(KEY_LAST_PLAYBACK_TRACK_ID)
+            it.remove(KEY_LAST_PLAYBACK_QUEUE_IDS)
+            it.remove(KEY_LAST_PLAYBACK_POSITION_MS)
         }
     }
 
