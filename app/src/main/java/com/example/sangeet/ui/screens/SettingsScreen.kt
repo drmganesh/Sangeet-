@@ -22,7 +22,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.sangeet.data.model.PlayerStyle
+import com.example.sangeet.data.model.CassetteStyle
 import com.example.sangeet.data.model.RuleListKind
 import com.example.sangeet.data.model.RuleStatus
 import com.example.sangeet.data.repository.MediaRepository
@@ -58,7 +58,8 @@ fun SettingsScreen(
 
     val totalPlayed by repository.totalSongsPlayed.collectAsState(initial = 0)
     val totalTimeMs by repository.totalListeningTimeMs.collectAsState(initial = 0L)
-    val currentStyle by playbackManager.playerStyle.collectAsState()
+    val currentCassetteStyle by playbackManager.cassetteStyle.collectAsState()
+    val mechanicalSounds by playbackManager.walkmanMechanicalSounds.collectAsState()
     val sleepTimerSec by playbackManager.sleepTimerSeconds.collectAsState()
 
     val blacklistEntries by repository.blacklist.collectAsState(initial = emptyList())
@@ -75,7 +76,7 @@ fun SettingsScreen(
 
     var showClearHistoryDialog by remember { mutableStateOf(false) }
     var showSleepTimerDialog by remember { mutableStateOf(false) }
-    var showPlayerStyleDialog by remember { mutableStateOf(false) }
+    var showCassetteStyleDialog by remember { mutableStateOf(false) }
     var showResetSettingsDialog by remember { mutableStateOf(false) }
 
     LazyColumn(
@@ -496,7 +497,7 @@ fun SettingsScreen(
             }
         }
 
-        // Section: Playback & Sleep Timer
+        // Section: Walkman Cassette Player & Sleep Timer
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -505,15 +506,32 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.padding(8.dp)) {
                     ListItem(
-                        headlineContent = { Text("Default Player Style") },
-                        supportingContent = { Text("${currentStyle.displayName} (Tap to change from 9 designs)") },
+                        headlineContent = { Text("Cassette Design") },
+                        supportingContent = { Text("${currentCassetteStyle.displayName} • ${currentCassetteStyle.badgeText}") },
                         leadingContent = {
-                            Icon(Icons.Rounded.Style, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Icon(Icons.Rounded.Album, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         },
                         trailingContent = {
                             Icon(Icons.Rounded.ChevronRight, contentDescription = null)
                         },
-                        modifier = Modifier.clickable { showPlayerStyleDialog = true }
+                        modifier = Modifier
+                            .clickable { showCassetteStyleDialog = true }
+                            .testTag("settings_cassette_style_btn")
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+                    ListItem(
+                        headlineContent = { Text("Walkman Mechanical Sounds") },
+                        supportingContent = { Text("Subtle tactile button & cassette door latch clicks") },
+                        leadingContent = {
+                            Icon(Icons.Rounded.TouchApp, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        },
+                        trailingContent = {
+                            Switch(
+                                checked = mechanicalSounds,
+                                onCheckedChange = { playbackManager.setWalkmanMechanicalSounds(it) },
+                                modifier = Modifier.testTag("settings_walkman_sounds_switch")
+                            )
+                        }
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
                     ListItem(
@@ -611,29 +629,29 @@ fun SettingsScreen(
         }
     }
 
-    // Player Style Dialog
-    if (showPlayerStyleDialog) {
+    // Cassette Design Customization Dialog
+    if (showCassetteStyleDialog) {
         AlertDialog(
-            onDismissRequest = { showPlayerStyleDialog = false },
-            title = { Text("Choose Player Style") },
+            onDismissRequest = { showCassetteStyleDialog = false },
+            title = { Text("Customize Cassette Design") },
             text = {
                 Column {
-                    PlayerStyle.entries.forEach { style ->
+                    CassetteStyle.entries.forEach { style ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    playbackManager.setPlayerStyle(style)
-                                    showPlayerStyleDialog = false
+                                    playbackManager.setCassetteStyle(style)
+                                    showCassetteStyleDialog = false
                                 }
                                 .padding(vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
-                                selected = currentStyle == style,
+                                selected = currentCassetteStyle == style,
                                 onClick = {
-                                    playbackManager.setPlayerStyle(style)
-                                    showPlayerStyleDialog = false
+                                    playbackManager.setCassetteStyle(style)
+                                    showCassetteStyleDialog = false
                                 }
                             )
                             Spacer(Modifier.width(8.dp))
@@ -647,7 +665,7 @@ fun SettingsScreen(
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = { showPlayerStyleDialog = false }) { Text("Close") }
+                TextButton(onClick = { showCassetteStyleDialog = false }) { Text("Close") }
             }
         )
     }
@@ -711,7 +729,7 @@ fun SettingsScreen(
             onDismissRequest = { showResetSettingsDialog = false },
             title = { Text("Reset All Settings to Defaults?") },
             text = {
-                Text("This will restore default AMOLED theme, Cyan accent, Flat 15-band equalizer, Natural stereo spatial audio, and Classic player style. Your media files and playlists will NOT be deleted.")
+                Text("This will restore default AMOLED theme, Cyan accent, Flat 15-band equalizer, Natural stereo spatial audio, and Classic Black cassette appearance. Your media files and playlists will NOT be deleted.")
             },
             confirmButton = {
                 TextButton(
@@ -720,7 +738,8 @@ fun SettingsScreen(
                             settingsRepo.resetAllSettingsToDefault()
                             onThemeModeChanged(ThemeMode.AMOLED)
                             onAccentColorChanged(AccentColor.CYAN)
-                            playbackManager.setPlayerStyle(PlayerStyle.CLASSIC)
+                            playbackManager.setCassetteStyle(CassetteStyle.CLASSIC_BLACK)
+                            playbackManager.setWalkmanMechanicalSounds(false)
                             playbackManager.setEqAllBands(FloatArray(15) { 0f })
                             playbackManager.setEqBassBoost(0f)
                             playbackManager.setEqTrebleBoost(0f)

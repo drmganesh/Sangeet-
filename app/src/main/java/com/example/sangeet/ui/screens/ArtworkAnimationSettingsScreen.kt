@@ -39,11 +39,12 @@ import com.example.sangeet.ui.components.ArtworkAnimationIntensity
 import com.example.sangeet.ui.components.ArtworkAnimationPreferencesSnapshot
 import com.example.sangeet.ui.components.ArtworkAnimationStyle
 import com.example.sangeet.ui.components.ArtworkMotionPlanner
+import com.example.sangeet.ui.components.CassetteArtwork
+import com.example.sangeet.ui.components.CassettePrintedArtImage
 import com.example.sangeet.ui.components.SpotlightArtworkTransitionHost
 import com.example.sangeet.ui.components.SpotlightTransitionDirection
 import com.example.sangeet.ui.components.SpotlightTransitionSpeed
 import com.example.sangeet.ui.components.SpotlightTransitionStyle
-import com.example.sangeet.ui.components.TrackArtwork
 import com.example.sangeet.ui.components.rememberEffectiveArtworkMotion
 import com.example.sangeet.ui.components.rememberIsAppResumed
 import kotlinx.coroutines.launch
@@ -668,11 +669,12 @@ private fun FeaturedTransitionLivePreviewCard(
                                 .fillMaxSize()
                                 .background(Brush.linearGradient(tintColors))
                         ) {
-                            TrackArtwork(
+                            CassettePrintedArtImage(
                                 track = track,
-                                shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
                                 crossfadeDurationMs = 0,
-                                modifier = Modifier.fillMaxSize()
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer { alpha = 0.28f }
                             )
                             Box(
                                 modifier = Modifier
@@ -680,12 +682,29 @@ private fun FeaturedTransitionLivePreviewCard(
                                     .background(
                                         Brush.verticalGradient(
                                             listOf(
-                                                Color.Black.copy(alpha = 0.14f),
-                                                Color.Black.copy(alpha = 0.88f)
+                                                Color.Black.copy(alpha = 0.56f),
+                                                Color.Black.copy(alpha = 0.90f)
                                             )
                                         )
                                     )
                             )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(start = 18.dp, end = 18.dp, top = 34.dp, bottom = 52.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CassetteArtwork(
+                                    track = track,
+                                    isPlaying = false,
+                                    showMetadataOnLabel = true,
+                                    compact = false,
+                                    crossfadeDurationMs = 0,
+                                    modifier = Modifier
+                                        .fillMaxHeight(0.94f)
+                                        .aspectRatio(1.56f)
+                                )
+                            }
                         }
                     },
                     overlayChrome = { shownTrack, metaAlpha ->

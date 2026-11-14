@@ -181,10 +181,13 @@ fun MiniPlayer(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Synchronized Album Art (only animates when track ID actually changes)
+                // Synchronized Miniature Cassette Artwork (rotates reels cleanly while playing)
+                val miniReelAngle by rememberVisibleCassetteReelAngle(
+                    isActivelyPlayingAndVisible = isPlaying && isAppResumed && motion.isEnabled
+                )
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .height(46.dp)
                         .graphicsLayer {
                             scaleX = breathingScale
                             scaleY = breathingScale
@@ -195,8 +198,8 @@ fun MiniPlayer(
                         Box(
                             modifier = Modifier
                                 .matchParentSize()
-                                .clip(RoundedCornerShape(13.dp))
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = glowAlpha * 0.28f))
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFFE8B429).copy(alpha = glowAlpha * 0.25f))
                         )
                     }
                     AnimatedContent(
@@ -221,13 +224,16 @@ fun MiniPlayer(
                                 EnterTransition.None togetherWith ExitTransition.None
                             }
                         },
-                        label = "mini_player_artwork"
+                        label = "mini_player_cassette"
                     ) { targetTrack ->
-                        TrackArtwork(
+                        MiniCassetteArtwork(
                             track = targetTrack,
-                            modifier = Modifier.size(46.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            crossfadeDurationMs = if (motion.trackTransitionsActive) motion.transitionDurationMs else 0
+                            isPlaying = isPlaying && isAppResumed,
+                            reelAngleDegrees = miniReelAngle,
+                            crossfadeDurationMs = if (motion.trackTransitionsActive) motion.transitionDurationMs else 0,
+                            modifier = Modifier
+                                .height(44.dp)
+                                .testTag("mini_player_cassette_artwork")
                         )
                     }
                 }

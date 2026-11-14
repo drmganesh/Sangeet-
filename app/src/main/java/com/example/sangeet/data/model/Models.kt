@@ -236,14 +236,34 @@ data class LyricsLine(
     val text: String
 )
 
-enum class PlayerStyle(val displayName: String, val description: String) {
-    CLASSIC("Classic", "Vinyl & CD Turntable with tactile analog controls"),
-    GESTURE("Gesture", "Minimalist layout with intuitive swipe gestures"),
-    EDITORIAL("Editorial", "Magazine-style typography and quote lyrics"),
-    CANVAS("Canvas", "Full-bleed artwork with ambient blur aura"),
-    BENTO("Bento", "Modern modular grid cards for visual metrics"),
-    STICKER("Sticker", "Playful retro pop badges and cassette vibe"),
-    MORPH("Morph", "Futuristic fluid neon orb visualizer"),
-    DIAL("Dial", "Audiophile rotary volume dial & analog VU meter"),
-    HERO("Hero", "Cinematic widescreen hero layout with dynamic wave")
+enum class CassetteStyle(
+    val displayName: String,
+    val description: String,
+    val badgeText: String
+) {
+    CLASSIC_BLACK(
+        displayName = "Classic Black",
+        description = "Matte obsidian shell with warm golden trim",
+        badgeText = "TYPE II • CHROME"
+    ),
+    TRANSPARENT(
+        displayName = "Transparent",
+        description = "Crystal-smoke shell revealing internal spools",
+        badgeText = "CLEAR • C-90"
+    ),
+    GOLDEN(
+        displayName = "Golden",
+        description = "Brushed 24k vintage metallic gold edition",
+        badgeText = "GOLD MASTER"
+    ),
+    RETRO_BROWN(
+        displayName = "Retro Brown",
+        description = "Warm walnut & studio ferric heritage tape",
+        badgeText = "FERRIC • TYPE I"
+    ),
+    PREMIUM_METALLIC(
+        displayName = "Metallic Chrome",
+        description = "Machined brushed silver aluminum housing",
+        badgeText = "METAL • TYPE IV"
+    )
 }

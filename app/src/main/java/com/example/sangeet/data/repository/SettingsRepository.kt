@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
-import com.example.sangeet.data.model.PlayerStyle
+import com.example.sangeet.data.model.CassetteStyle
 import com.example.sangeet.ui.components.ArtworkAnimationIntensity
 import com.example.sangeet.ui.components.ArtworkAnimationPreferencesSnapshot
 import com.example.sangeet.ui.components.ArtworkAnimationStyle
@@ -74,8 +74,9 @@ class SettingsRepository(private val context: Context) {
         val KEY_ACCENT_COLOR = stringPreferencesKey("accent_color")
         val KEY_DYNAMIC_ARTWORK_COLOR = booleanPreferencesKey("dynamic_artwork_color")
 
-        // Player
-        val KEY_PLAYER_STYLE = stringPreferencesKey("player_style")
+        // Player / Walkman
+        val KEY_CASSETTE_STYLE = stringPreferencesKey("cassette_style")
+        val KEY_WALKMAN_MECHANICAL_SOUNDS = booleanPreferencesKey("walkman_mechanical_sounds")
         val KEY_ARTWORK_ANIMATION = booleanPreferencesKey("artwork_animation")
         val KEY_GESTURES_ENABLED = booleanPreferencesKey("gestures_enabled")
 
@@ -190,10 +191,14 @@ class SettingsRepository(private val context: Context) {
 
     val dynamicArtworkColor: Flow<Boolean> = safePreferences.map { it[KEY_DYNAMIC_ARTWORK_COLOR] ?: true }
 
-    // --- Player Flows ---
-    val playerStyle: Flow<PlayerStyle> = safePreferences.map { prefs ->
-        val name = prefs[KEY_PLAYER_STYLE] ?: PlayerStyle.CLASSIC.name
-        try { PlayerStyle.valueOf(name) } catch (_: Exception) { PlayerStyle.CLASSIC }
+    // --- Walkman Player Flows ---
+    val cassetteStyle: Flow<CassetteStyle> = safePreferences.map { prefs ->
+        val name = prefs[KEY_CASSETTE_STYLE] ?: CassetteStyle.CLASSIC_BLACK.name
+        try { CassetteStyle.valueOf(name) } catch (_: Exception) { CassetteStyle.CLASSIC_BLACK }
+    }
+
+    val walkmanMechanicalSounds: Flow<Boolean> = safePreferences.map {
+        it[KEY_WALKMAN_MECHANICAL_SOUNDS] ?: false
     }
 
     val artworkAnimation: Flow<Boolean> = safePreferences.map { it[KEY_ARTWORK_ANIMATION] ?: true }
@@ -331,8 +336,12 @@ class SettingsRepository(private val context: Context) {
         dataStore.edit { it[KEY_DYNAMIC_ARTWORK_COLOR] = enabled }
     }
 
-    suspend fun setPlayerStyle(style: PlayerStyle) {
-        dataStore.edit { it[KEY_PLAYER_STYLE] = style.name }
+    suspend fun setCassetteStyle(style: CassetteStyle) {
+        dataStore.edit { it[KEY_CASSETTE_STYLE] = style.name }
+    }
+
+    suspend fun setWalkmanMechanicalSounds(enabled: Boolean) {
+        dataStore.edit { it[KEY_WALKMAN_MECHANICAL_SOUNDS] = enabled }
     }
 
     suspend fun setArtworkAnimation(enabled: Boolean) {

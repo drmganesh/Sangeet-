@@ -37,10 +37,12 @@ import com.example.sangeet.ui.components.AnimatedArtistCard
 import com.example.sangeet.ui.components.AnimatedFeaturedSpotlightCard
 import com.example.sangeet.ui.components.AnimatedQuickPickCard
 import com.example.sangeet.ui.components.ArtworkAnimationPreferencesSnapshot
-import com.example.sangeet.ui.components.TrackArtwork
+import com.example.sangeet.ui.components.CassetteArtworkCard
+import com.example.sangeet.ui.components.MiniCassetteArtwork
 import com.example.sangeet.ui.components.rememberCarouselBreathingPhase
 import com.example.sangeet.ui.components.rememberEffectiveArtworkMotion
 import com.example.sangeet.ui.components.rememberIsAppResumed
+import com.example.sangeet.ui.components.rememberVisibleCassetteReelAngle
 import kotlinx.coroutines.launch
 import java.util.Calendar
 
@@ -65,6 +67,7 @@ fun HomeScreen(
     val favoriteTracks by repository.favoriteTracks.collectAsState(initial = emptyList())
     val allArtists by repository.allArtists.collectAsState(initial = emptyList())
     val allAlbums by repository.allAlbums.collectAsState(initial = emptyList())
+    val allPlaylists by repository.allPlaylists.collectAsState(initial = emptyList())
 
     val showGreeting by settingsRepo.showGreeting.collectAsState(initial = true)
     val spotlightHome by settingsRepo.spotlightHome.collectAsState(initial = true)
@@ -114,9 +117,31 @@ fun HomeScreen(
             listState.layoutInfo.visibleItemsInfo.any { it.key == "local_mix_section" }
         }
     }
+    val isRecentlyPlayedVisible by remember {
+        derivedStateOf {
+            listState.layoutInfo.visibleItemsInfo.any { it.key == "recently_played_section" }
+        }
+    }
+    val isAlbumsVisible by remember {
+        derivedStateOf {
+            listState.layoutInfo.visibleItemsInfo.any { it.key == "featured_albums_section" }
+        }
+    }
+    val isPlaylistsVisible by remember {
+        derivedStateOf {
+            listState.layoutInfo.visibleItemsInfo.any { it.key == "home_playlists_section" }
+        }
+    }
 
     val quickPicksTracks = remember(allTracks) { allTracks.take(8) }
     val localMixTracks = remember(allTracks) { allTracks.shuffled().take(6) }
+    val albumRepresentativeTracks = remember(allAlbums, allTracks) {
+        val grouped = allTracks.groupBy { it.album.trim().lowercase() }
+        allAlbums.mapNotNull { albumName ->
+            val albumTracks = grouped[albumName.trim().lowercase()].orEmpty()
+            albumTracks.firstOrNull { it.artworkUri.isNotBlank() } ?: albumTracks.firstOrNull()
+        }.take(10)
+    }
     val artistTrackMap = remember(allTracks) {
         allTracks.groupBy { it.artist.trim().lowercase() }
             .mapValues { (_, list) ->
@@ -322,7 +347,9 @@ fun HomeScreen(
                                 motion = motion,
                                 breathingPhaseState = quickPicksPhase,
                                 rowState = quickPicksRowState,
-                                onClick = { playbackManager.playTrack(track, allTracks) }
+                                onClick = { playbackManager.playTrack(track, allTracks) },
+                                isAudioPlaying = isPlaying && isAppResumed,
+                                isSectionVisible = isQuickPicksVisible
                             )
                         }
                     }
@@ -390,14 +417,16 @@ fun HomeScreen(
                                 motion = motion,
                                 breathingPhaseState = localMixPhase,
                                 rowState = localMixRowState,
-                                onClick = { playbackManager.playTrack(track, allTracks) }
+                                onClick = { playbackManager.playTrack(track, allTracks) },
+                                isAudioPlaying = isPlaying && isAppResumed,
+                                isSectionVisible = isLocalMixVisible
                             )
                         }
                     }
                 }
             }
 
-            // Recently Added Tracks (Vertical List)
+            // Recently Added Tracks (Vertical List with Mini Cassette Artwork)
             if (recentlyAdded.isNotEmpty()) {
                 item {
                     Text(
@@ -407,9 +436,11 @@ fun HomeScreen(
                         modifier = Modifier.padding(horizontal = 20.dp)
                     )
                 }
-                items(recentlyAdded.take(5)) { track ->
+                items(recentlyAdded.take(5), key = { "recent_added_${it.id}" }) { track ->
                     HomeTrackListItem(
                         track = track,
+                        isCurrentTrack = currentlyPlayingTrack?.id == track.id,
+                        isAudioPlaying = isPlaying && isAppResumed,
                         onPlay = { playbackManager.playTrack(track, recentlyAdded) },
                         onToggleFavorite = {
                             coroutineScope.launch {
@@ -418,6 +449,153 @@ fun HomeScreen(
                         },
                         modifier = Modifier.padding(horizontal = 20.dp)
                     )
+                }
+            }
+
+            // Carousel: Recently Played Cassettes
+            if (recentlyPlayed.isNotEmpty()) {
+                item(key = "recently_played_section") {
+                    val recentRowState = rememberLazyListState()
+                    val recentPhase = rememberCarouselBreathingPhase(
+                        isSectionVisible = isRecentlyPlayedVisible,
+                        isAppResumed = isAppResumed,
+                        isBreathingEnabled = motion.cardBreathingActive
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            text = "RECENTLY PLAYED",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 20.dp)
+                        )
+                        LazyRow(
+                            state = recentRowState,
+                            contentPadding = PaddingValues(horizontal = 20.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            itemsIndexed(recentlyPlayed.take(10), key = { _, t -> t.id }) { index, track ->
+                                AnimatedQuickPickCard(
+                                    track = track,
+                                    index = index,
+                                    isCurrentlyPlaying = currentlyPlayingTrack?.id == track.id,
+                                    motion = motion,
+                                    breathingPhaseState = recentPhase,
+                                    rowState = recentRowState,
+                                    onClick = { playbackManager.playTrack(track, recentlyPlayed) },
+                                    isAudioPlaying = isPlaying && isAppResumed,
+                                    isSectionVisible = isRecentlyPlayedVisible
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Carousel: Featured Albums (Each Album Displayed as a Printed Cassette)
+            if (albumRepresentativeTracks.isNotEmpty()) {
+                item(key = "featured_albums_section") {
+                    val albumsRowState = rememberLazyListState()
+                    val albumsPhase = rememberCarouselBreathingPhase(
+                        isSectionVisible = isAlbumsVisible,
+                        isAppResumed = isAppResumed,
+                        isBreathingEnabled = motion.cardBreathingActive
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            text = "FEATURED ALBUMS",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 20.dp)
+                        )
+                        LazyRow(
+                            state = albumsRowState,
+                            contentPadding = PaddingValues(horizontal = 20.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            itemsIndexed(albumRepresentativeTracks, key = { _, t -> t.id }) { index, albumTrack ->
+                                val albumQueue = remember(albumTrack.album, allTracks) {
+                                    allTracks.filter { it.album.equals(albumTrack.album, ignoreCase = true) }
+                                        .ifEmpty { listOf(albumTrack) }
+                                }
+                                AnimatedQuickPickCard(
+                                    track = albumTrack,
+                                    index = index,
+                                    isCurrentlyPlaying = currentlyPlayingTrack?.album?.equals(albumTrack.album, ignoreCase = true) == true,
+                                    motion = motion,
+                                    breathingPhaseState = albumsPhase,
+                                    rowState = albumsRowState,
+                                    onClick = { playbackManager.playTrack(albumQueue.first(), albumQueue) },
+                                    isAudioPlaying = isPlaying && isAppResumed,
+                                    isSectionVisible = isAlbumsVisible,
+                                    titleOverride = albumTrack.album.ifBlank { albumTrack.title },
+                                    subtitleOverride = albumTrack.artist
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Carousel: Playlists (Displayed as Printed Cassettes)
+            if (allPlaylists.isNotEmpty()) {
+                item(key = "home_playlists_section") {
+                    val playlistsRowState = rememberLazyListState()
+                    val playlistsPhase = rememberCarouselBreathingPhase(
+                        isSectionVisible = isPlaylistsVisible,
+                        isAppResumed = isAppResumed,
+                        isBreathingEnabled = motion.cardBreathingActive
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            text = "YOUR PLAYLISTS",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 20.dp)
+                        )
+                        LazyRow(
+                            state = playlistsRowState,
+                            contentPadding = PaddingValues(horizontal = 20.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            itemsIndexed(allPlaylists.take(10), key = { _, p -> -p.id - 1000L }) { index, playlist ->
+                                val playlistTracks by repository.getPlaylistTracks(playlist.id)
+                                    .collectAsState(initial = emptyList())
+                                val coverTrack = remember(playlist.id, playlist.customArtworkUri, playlistTracks) {
+                                    val firstTrackWithArt = playlistTracks.firstOrNull { it.artworkUri.isNotBlank() }
+                                        ?: playlistTracks.firstOrNull()
+                                    val artUri = playlist.customArtworkUri.ifBlank { firstTrackWithArt?.artworkUri.orEmpty() }
+                                    AudioTrack(
+                                        id = -playlist.id - 1000L,
+                                        title = playlist.name,
+                                        artist = "Playlist",
+                                        album = "${playlistTracks.size} tracks",
+                                        durationMs = 0L,
+                                        path = firstTrackWithArt?.path.orEmpty(),
+                                        artworkUri = artUri
+                                    )
+                                }
+                                AnimatedQuickPickCard(
+                                    track = coverTrack,
+                                    index = index,
+                                    isCurrentlyPlaying = false,
+                                    motion = motion,
+                                    breathingPhaseState = playlistsPhase,
+                                    rowState = playlistsRowState,
+                                    onClick = {
+                                        if (playlistTracks.isNotEmpty()) {
+                                            playbackManager.playTrack(playlistTracks.first(), playlistTracks)
+                                        } else {
+                                            onNavigateToLibrary()
+                                        }
+                                    },
+                                    isAudioPlaying = false,
+                                    isSectionVisible = isPlaylistsVisible,
+                                    titleOverride = playlist.name,
+                                    subtitleOverride = "${playlistTracks.size} tracks"
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -435,9 +613,11 @@ fun HomeScreen(
                     modifier = Modifier.padding(horizontal = 20.dp)
                 )
             }
-            items(allTracks.take(12)) { track ->
+            items(allTracks.take(12), key = { "classic_all_${it.id}" }) { track ->
                 HomeTrackListItem(
                     track = track,
+                    isCurrentTrack = currentlyPlayingTrack?.id == track.id,
+                    isAudioPlaying = isPlaying && isAppResumed,
                     onPlay = { playbackManager.playTrack(track, allTracks) },
                     onToggleFavorite = {
                         coroutineScope.launch {
@@ -457,9 +637,11 @@ fun HomeScreen(
                         modifier = Modifier.padding(horizontal = 20.dp)
                     )
                 }
-                items(favoriteTracks.take(6)) { track ->
+                items(favoriteTracks.take(6), key = { "classic_fav_${it.id}" }) { track ->
                     HomeTrackListItem(
                         track = track,
+                        isCurrentTrack = currentlyPlayingTrack?.id == track.id,
+                        isAudioPlaying = isPlaying && isAppResumed,
                         onPlay = { playbackManager.playTrack(track, favoriteTracks) },
                         onToggleFavorite = {
                             coroutineScope.launch {
@@ -478,20 +660,28 @@ fun HomeScreen(
 fun HomeTrackCard(
     track: AudioTrack,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isCurrentlyPlaying: Boolean = false,
+    isAudioPlaying: Boolean = false
 ) {
     Surface(
         modifier = modifier
-            .width(140.dp)
+            .width(152.dp)
             .clickable { onClick() },
         shape = RoundedCornerShape(16.dp),
         color = Color.Transparent
     ) {
         Column {
-            TrackArtwork(
+            CassetteArtworkCard(
                 track = track,
-                modifier = Modifier.size(130.dp),
-                shape = RoundedCornerShape(18.dp)
+                isCurrentlyPlaying = isCurrentlyPlaying,
+                isAudioPlaying = isAudioPlaying,
+                isVisible = true,
+                crossfadeDurationMs = 200,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(106.dp)
+                    .testTag("home_track_cassette_${track.id}")
             )
             Spacer(Modifier.height(8.dp))
             Text(
@@ -499,7 +689,7 @@ fun HomeTrackCard(
                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onSurface
+                color = if (isCurrentlyPlaying) Color(0xFFFFD666) else MaterialTheme.colorScheme.onSurface
             )
             Text(
                 text = track.artist,
@@ -517,25 +707,37 @@ fun HomeTrackListItem(
     track: AudioTrack,
     onPlay: () -> Unit,
     onToggleFavorite: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isCurrentTrack: Boolean = false,
+    isAudioPlaying: Boolean = false
 ) {
+    val activeSpin = isCurrentTrack && isAudioPlaying
+    val seedAngle = remember(track.id) { ((track.id * 41L) % 360L).toFloat() }
+    val reelAngle by rememberVisibleCassetteReelAngle(
+        isActivelyPlayingAndVisible = activeSpin,
+        seedAngleDegrees = seedAngle
+    )
+
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .clickable { onPlay() },
-        color = Color.Transparent
+        color = if (isCurrentTrack) Color(0xFFE8B429).copy(alpha = 0.08f) else Color.Transparent
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 8.dp),
+                .padding(horizontal = 6.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TrackArtwork(
+            MiniCassetteArtwork(
                 track = track,
-                modifier = Modifier.size(48.dp),
-                shape = RoundedCornerShape(12.dp)
+                isPlaying = activeSpin,
+                reelAngleDegrees = reelAngle,
+                modifier = Modifier
+                    .height(42.dp)
+                    .testTag("home_list_cassette_${track.id}")
             )
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
@@ -544,7 +746,7 @@ fun HomeTrackListItem(
                     style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = if (isCurrentTrack) Color(0xFFFFD666) else MaterialTheme.colorScheme.onSurface
                 )
                 Text(
                     text = "${track.artist} • ${track.album}",

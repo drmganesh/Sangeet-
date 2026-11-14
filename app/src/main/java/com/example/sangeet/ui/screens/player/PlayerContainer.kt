@@ -1,25 +1,55 @@
 package com.example.sangeet.ui.screens.player
 
-import androidx.compose.animation.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.rounded.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.rounded.Album
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.SurroundSound
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.sangeet.data.model.AudioTrack
-import com.example.sangeet.data.model.PlayerStyle
 import com.example.sangeet.playback.PlaybackManager
+import com.example.sangeet.ui.components.ArtworkMotionPlanner
+import com.example.sangeet.ui.components.rememberIsAppResumed
+
+private val WalkmanBackdropTop = Color(0xFF0A0805)
+private val WalkmanBackdropBottom = Color(0xFF000000)
+private val WalkmanAccentGold = Color(0xFFE8B429)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -30,22 +60,69 @@ fun PlayerContainer(
     onNavigateToSpatial: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val currentTrack by playbackManager.currentTrack.collectAsState()
     val isPlaying by playbackManager.isPlaying.collectAsState()
+    val isStopped by playbackManager.isStopped.collectAsState()
     val positionMs by playbackManager.currentPositionMs.collectAsState()
     val durationMs by playbackManager.durationMs.collectAsState()
     val isShuffle by playbackManager.isShuffleEnabled.collectAsState()
     val repeatMode by playbackManager.repeatMode.collectAsState()
-    val playerStyle by playbackManager.playerStyle.collectAsState()
+    val cassetteStyle by playbackManager.cassetteStyle.collectAsState()
+    val mechanicalSounds by playbackManager.walkmanMechanicalSounds.collectAsState()
     val queue by playbackManager.queue.collectAsState()
 
-    var showStyleMenu by remember { mutableStateOf(false) }
+    val isAppResumed by rememberIsAppResumed()
+    val systemAnimatorsEnabled = remember(context, isAppResumed) {
+        ArtworkMotionPlanner.isSystemAnimationEnabled(context)
+    }
+    val reducedMotion = !systemAnimatorsEnabled
+
+    var showCassetteStyleSheet by remember { mutableStateOf(false) }
     var showLyricsSheet by remember { mutableStateOf(false) }
     var showQueueSheet by remember { mutableStateOf(false) }
 
-    if (currentTrack == null) {
+    var seekImpulseDirection by remember { mutableIntStateOf(0) }
+    var seekImpulseToken by remember { mutableIntStateOf(0) }
+
+    val track = currentTrack
+    if (track == null) {
         onDismiss()
         return
+    }
+
+    val safeDuration = durationMs.takeIf { it > 0L } ?: track.durationMs.coerceAtLeast(1L)
+    val progressFraction = (positionMs.toFloat() / safeDuration).coerceIn(0f, 1f)
+
+    val transportState = when {
+        isPlaying -> WalkmanTransportState.PLAYING
+        isStopped -> WalkmanTransportState.STOPPED
+        else -> WalkmanTransportState.PAUSED
+    }
+
+    val swapController = rememberCassetteSwapController(
+        currentTrack = track,
+        reducedMotion = reducedMotion,
+        onPlayMechanicalSound = { soundType ->
+            WalkmanSoundEngine.playIfEnabled(mechanicalSounds, soundType)
+        }
+    )
+
+    val reelAngles = rememberCassetteReelAngles(
+        isPlaying = isPlaying && isAppResumed,
+        isCassetteSeated = swapController.isCassetteSeated,
+        progressFraction = progressFraction,
+        seekImpulseDirection = seekImpulseDirection,
+        seekImpulseToken = seekImpulseToken,
+        reducedMotion = reducedMotion
+    )
+
+    fun resolveNeighborTrack(offset: Int): AudioTrack? {
+        if (queue.isEmpty()) return null
+        val curIdx = queue.indexOfFirst { it.id == track.id }
+        if (curIdx == -1) return queue.firstOrNull()
+        val targetIdx = ((curIdx + offset) % queue.size + queue.size) % queue.size
+        return queue.getOrNull(targetIdx)
     }
 
     Scaffold(
@@ -57,119 +134,58 @@ fun PlayerContainer(
                 title = {
                     Column {
                         Text(
-                            text = "PLAYING FROM LIBRARY",
+                            text = "SANGEET WALKMAN",
                             style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.SemiBold,
-                                letterSpacing = 1.sp
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 1.4.sp
                             ),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = WalkmanAccentGold
                         )
                         Text(
-                            text = playerStyle.displayName + " Style",
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.primary
+                            text = "Portable Cassette Stereo • Offline",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF9CA3AF)
                         )
                     }
                 },
                 navigationIcon = {
                     IconButton(
                         onClick = onDismiss,
-                        modifier = Modifier.testTag("player_collapse_btn")
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("player_collapse_btn")
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.KeyboardArrowDown,
-                            contentDescription = "Collapse",
-                            tint = MaterialTheme.colorScheme.onSurface
+                            contentDescription = "Collapse Player",
+                            tint = Color(0xFFF3F4F6)
                         )
                     }
                 },
                 actions = {
-                    // Style Switcher
-                    Box {
-                        IconButton(
-                            onClick = { showStyleMenu = true },
-                            modifier = Modifier.testTag("player_style_picker")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Style,
-                                contentDescription = "Switch Style",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = showStyleMenu,
-                            onDismissRequest = { showStyleMenu = false }
-                        ) {
-                            PlayerStyle.entries.forEach { style ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Column {
-                                            Text(
-                                                text = style.displayName,
-                                                fontWeight = if (style == playerStyle) FontWeight.Bold else FontWeight.Normal,
-                                                color = if (style == playerStyle) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                            )
-                                            Text(
-                                                text = style.description,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    },
-                                    onClick = {
-                                        playbackManager.setPlayerStyle(style)
-                                        showStyleMenu = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-
-                    // 15-Band EQ Shortcut
                     IconButton(
-                        onClick = onNavigateToEqualizer,
-                        modifier = Modifier.testTag("player_eq_shortcut")
+                        onClick = { showCassetteStyleSheet = true },
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("walkman_cassette_picker_btn")
                     ) {
                         Icon(
-                            imageVector = Icons.Rounded.GraphicEq,
-                            contentDescription = "Equalizer",
-                            tint = MaterialTheme.colorScheme.onSurface
+                            imageVector = Icons.Rounded.Album,
+                            contentDescription = "Customize Cassette Design",
+                            tint = WalkmanAccentGold
                         )
                     }
-
-                    // 360 Spatial Shortcut
                     IconButton(
                         onClick = onNavigateToSpatial,
-                        modifier = Modifier.testTag("player_spatial_shortcut")
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("player_spatial_shortcut")
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.SurroundSound,
-                            contentDescription = "360 Spatial Audio",
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    // Lyrics Shortcut
-                    IconButton(
-                        onClick = { showLyricsSheet = true },
-                        modifier = Modifier.testTag("player_lyrics_btn")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Lyrics,
-                            contentDescription = "Lyrics",
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    // Queue Shortcut
-                    IconButton(
-                        onClick = { showQueueSheet = true },
-                        modifier = Modifier.testTag("player_queue_btn")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.QueueMusic,
-                            contentDescription = "Queue",
-                            tint = MaterialTheme.colorScheme.onSurface
+                            contentDescription = "360° Spatial Audio",
+                            tint = Color(0xFFF3F4F6)
                         )
                     }
                 },
@@ -178,114 +194,130 @@ fun PlayerContainer(
                 )
             )
         },
-        containerColor = MaterialTheme.colorScheme.background
+        containerColor = Color.Black
     ) { innerPadding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(WalkmanBackdropTop, WalkmanBackdropBottom, WalkmanBackdropBottom)
+                    )
+                )
                 .padding(innerPadding)
         ) {
-            // Render the currently selected style
-            when (playerStyle) {
-                PlayerStyle.CLASSIC -> ClassicPlayer(
-                    track = currentTrack!!,
-                    isPlaying = isPlaying,
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                // Signature Vintage Walkman Cassette Player
+                WalkmanBody(
+                    track = track,
+                    cassetteStyle = cassetteStyle,
+                    transportState = transportState,
+                    swapController = swapController,
+                    reelAngles = reelAngles,
+                    progressFraction = progressFraction,
+                    reducedMotion = reducedMotion,
+                    onRewind = {
+                        WalkmanSoundEngine.playIfEnabled(mechanicalSounds, MechanicalSoundType.BUTTON_PRESS)
+                        seekImpulseDirection = -1
+                        seekImpulseToken++
+                        playbackManager.seekBackward(10_000L)
+                    },
+                    onPrevious = {
+                        WalkmanSoundEngine.playIfEnabled(mechanicalSounds, MechanicalSoundType.BUTTON_PRESS)
+                        if (queue.size > 1) {
+                            swapController.triggerManualSwap(
+                                currentDisplayedTrack = track,
+                                swapDirection = CassetteSwapDirection.PREVIOUS,
+                                expectedNextTrack = resolveNeighborTrack(-1)
+                            ) {
+                                playbackManager.skipToPrevious(forcePreviousTrack = true)
+                            }
+                        } else {
+                            playbackManager.skipToPrevious(forcePreviousTrack = true)
+                        }
+                    },
+                    onPlay = {
+                        WalkmanSoundEngine.playIfEnabled(mechanicalSounds, MechanicalSoundType.LATCH_ENGAGE)
+                        playbackManager.play()
+                    },
+                    onPause = {
+                        WalkmanSoundEngine.playIfEnabled(mechanicalSounds, MechanicalSoundType.LATCH_ENGAGE)
+                        playbackManager.pause()
+                    },
+                    onStop = {
+                        WalkmanSoundEngine.playIfEnabled(mechanicalSounds, MechanicalSoundType.LATCH_ENGAGE)
+                        playbackManager.stopPlaybackPreservingQueue()
+                    },
+                    onNext = {
+                        WalkmanSoundEngine.playIfEnabled(mechanicalSounds, MechanicalSoundType.BUTTON_PRESS)
+                        if (queue.size > 1) {
+                            swapController.triggerManualSwap(
+                                currentDisplayedTrack = track,
+                                swapDirection = CassetteSwapDirection.NEXT,
+                                expectedNextTrack = resolveNeighborTrack(+1)
+                            ) {
+                                playbackManager.skipToNext()
+                            }
+                        } else {
+                            playbackManager.skipToNext()
+                        }
+                    },
+                    onFastForward = {
+                        WalkmanSoundEngine.playIfEnabled(mechanicalSounds, MechanicalSoundType.BUTTON_PRESS)
+                        seekImpulseDirection = 1
+                        seekImpulseToken++
+                        playbackManager.seekForward(10_000L)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                // Track Information, Progress Slider & Time Readout
+                PlaybackProgress(
+                    track = track,
                     positionMs = positionMs,
                     durationMs = durationMs,
+                    onSeek = { targetMs -> playbackManager.seekTo(targetMs) }
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Clean Utility Row: Shuffle, Queue, 15-Band EQ, Lyrics, Repeat
+                WalkmanUtilityBar(
                     isShuffle = isShuffle,
                     repeatMode = repeatMode,
-                    onTogglePlay = { playbackManager.togglePlayPause() },
-                    onNext = { playbackManager.playNext() },
-                    onPrev = { playbackManager.playPrevious() },
-                    onSeek = { playbackManager.seekTo(it) },
                     onToggleShuffle = { playbackManager.toggleShuffle() },
+                    onOpenQueue = { showQueueSheet = true },
+                    onOpenEqualizer = onNavigateToEqualizer,
+                    onOpenLyrics = { showLyricsSheet = true },
                     onCycleRepeat = { playbackManager.cycleRepeatMode() }
                 )
-                PlayerStyle.GESTURE -> GesturePlayer(
-                    track = currentTrack!!,
-                    isPlaying = isPlaying,
-                    positionMs = positionMs,
-                    durationMs = durationMs,
-                    onTogglePlay = { playbackManager.togglePlayPause() },
-                    onNext = { playbackManager.playNext() },
-                    onPrev = { playbackManager.playPrevious() },
-                    onSeek = { playbackManager.seekTo(it) }
-                )
-                PlayerStyle.EDITORIAL -> EditorialPlayer(
-                    track = currentTrack!!,
-                    isPlaying = isPlaying,
-                    positionMs = positionMs,
-                    durationMs = durationMs,
-                    onTogglePlay = { playbackManager.togglePlayPause() },
-                    onNext = { playbackManager.playNext() },
-                    onPrev = { playbackManager.playPrevious() },
-                    onSeek = { playbackManager.seekTo(it) },
-                    onOpenLyrics = { showLyricsSheet = true }
-                )
-                PlayerStyle.CANVAS -> CanvasPlayer(
-                    track = currentTrack!!,
-                    isPlaying = isPlaying,
-                    positionMs = positionMs,
-                    durationMs = durationMs,
-                    onTogglePlay = { playbackManager.togglePlayPause() },
-                    onNext = { playbackManager.playNext() },
-                    onPrev = { playbackManager.playPrevious() },
-                    onSeek = { playbackManager.seekTo(it) }
-                )
-                PlayerStyle.BENTO -> BentoPlayer(
-                    track = currentTrack!!,
-                    isPlaying = isPlaying,
-                    positionMs = positionMs,
-                    durationMs = durationMs,
-                    onTogglePlay = { playbackManager.togglePlayPause() },
-                    onNext = { playbackManager.playNext() },
-                    onPrev = { playbackManager.playPrevious() },
-                    onSeek = { playbackManager.seekTo(it) },
-                    onOpenLyrics = { showLyricsSheet = true },
-                    onOpenEq = onNavigateToEqualizer,
-                    onOpenSpatial = onNavigateToSpatial
-                )
-                PlayerStyle.STICKER -> StickerPlayer(
-                    track = currentTrack!!,
-                    isPlaying = isPlaying,
-                    positionMs = positionMs,
-                    durationMs = durationMs,
-                    onTogglePlay = { playbackManager.togglePlayPause() },
-                    onNext = { playbackManager.playNext() },
-                    onPrev = { playbackManager.playPrevious() },
-                    onSeek = { playbackManager.seekTo(it) }
-                )
-                PlayerStyle.MORPH -> MorphPlayer(
-                    track = currentTrack!!,
-                    isPlaying = isPlaying,
-                    positionMs = positionMs,
-                    durationMs = durationMs,
-                    onTogglePlay = { playbackManager.togglePlayPause() },
-                    onNext = { playbackManager.playNext() },
-                    onPrev = { playbackManager.playPrevious() },
-                    onSeek = { playbackManager.seekTo(it) }
-                )
-                PlayerStyle.DIAL -> DialPlayer(
-                    track = currentTrack!!,
-                    isPlaying = isPlaying,
-                    positionMs = positionMs,
-                    durationMs = durationMs,
-                    onTogglePlay = { playbackManager.togglePlayPause() },
-                    onNext = { playbackManager.playNext() },
-                    onPrev = { playbackManager.playPrevious() },
-                    onSeek = { playbackManager.seekTo(it) }
-                )
-                PlayerStyle.HERO -> HeroPlayer(
-                    track = currentTrack!!,
-                    isPlaying = isPlaying,
-                    positionMs = positionMs,
-                    durationMs = durationMs,
-                    onTogglePlay = { playbackManager.togglePlayPause() },
-                    onNext = { playbackManager.playNext() },
-                    onPrev = { playbackManager.playPrevious() },
-                    onSeek = { playbackManager.seekTo(it) }
-                )
+
+                Spacer(modifier = Modifier.height(8.dp))
             }
+        }
+    }
+
+    // Cassette Appearance Customization Sheet
+    if (showCassetteStyleSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showCassetteStyleSheet = false },
+            containerColor = MaterialTheme.colorScheme.surface
+        ) {
+            CassetteStyleSheetContent(
+                selectedStyle = cassetteStyle,
+                onSelectStyle = { newStyle ->
+                    playbackManager.setCassetteStyle(newStyle)
+                    showCassetteStyleSheet = false
+                }
+            )
         }
     }
 
@@ -296,7 +328,7 @@ fun PlayerContainer(
             containerColor = MaterialTheme.colorScheme.surface
         ) {
             LyricsSheetContent(
-                track = currentTrack!!,
+                track = track,
                 currentPositionMs = positionMs,
                 onSeek = { playbackManager.seekTo(it) },
                 onClose = { showLyricsSheet = false }
@@ -312,9 +344,9 @@ fun PlayerContainer(
         ) {
             QueueSheetContent(
                 queue = queue,
-                currentTrack = currentTrack,
-                onSelectTrack = { playbackManager.playTrack(it) },
-                onRemoveTrack = { playbackManager.removeFromQueue(it) },
+                currentTrack = track,
+                onSelectTrack = { selected -> playbackManager.playTrack(selected, queue) },
+                onRemoveTrack = { idx -> playbackManager.removeFromQueue(idx) },
                 onClose = { showQueueSheet = false }
             )
         }

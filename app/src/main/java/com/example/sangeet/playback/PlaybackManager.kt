@@ -64,8 +64,14 @@ class PlaybackManager private constructor(private val context: Context) {
     private val _sleepTimerSeconds = MutableStateFlow<Int?>(null)
     val sleepTimerSeconds: StateFlow<Int?> = _sleepTimerSeconds.asStateFlow()
 
-    private val _playerStyle = MutableStateFlow(PlayerStyle.CLASSIC)
-    val playerStyle: StateFlow<PlayerStyle> = _playerStyle.asStateFlow()
+    private val _cassetteStyle = MutableStateFlow(CassetteStyle.CLASSIC_BLACK)
+    val cassetteStyle: StateFlow<CassetteStyle> = _cassetteStyle.asStateFlow()
+
+    private val _walkmanMechanicalSounds = MutableStateFlow(false)
+    val walkmanMechanicalSounds: StateFlow<Boolean> = _walkmanMechanicalSounds.asStateFlow()
+
+    private val _isStopped = MutableStateFlow(false)
+    val isStopped: StateFlow<Boolean> = _isStopped.asStateFlow()
 
     private var sleepTimerJob: Job? = null
     private var progressUpdateJob: Job? = null
@@ -168,14 +174,16 @@ class PlaybackManager private constructor(private val context: Context) {
     private fun restorePersistedSettings() {
         applicationScope.launch(Dispatchers.IO) {
             try {
-                // Restore Player & Playback settings
-                val style = settingsRepository.playerStyle.first()
+                // Restore Walkman & Playback settings
+                val style = settingsRepository.cassetteStyle.first()
+                val mechSounds = settingsRepository.walkmanMechanicalSounds.first()
                 val shuffle = settingsRepository.shuffleEnabled.first()
                 val repeat = settingsRepository.repeatMode.first()
                 val speed = settingsRepository.playbackSpeed.first()
 
                 withContext(Dispatchers.Main) {
-                    _playerStyle.value = style
+                    _cassetteStyle.value = style
+                    _walkmanMechanicalSounds.value = mechSounds
                     _isShuffleEnabled.value = shuffle
                     exoPlayer.shuffleModeEnabled = shuffle
                     _repeatMode.value = repeat
@@ -233,6 +241,7 @@ class PlaybackManager private constructor(private val context: Context) {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 _isPlaying.value = isPlaying
                 if (isPlaying) {
+                    _isStopped.value = false
                     startPlaybackService()
                 } else {
                     persistCurrentPlaybackSnapshot()
@@ -424,6 +433,7 @@ class PlaybackManager private constructor(private val context: Context) {
         val index = allowedQueue.indexOfFirst { it.id == selected.id }.coerceAtLeast(0)
         _queue.value = allowedQueue
         _currentTrack.value = selected
+        _isStopped.value = false
 
         exoPlayer.clearMediaItems()
         val mediaItems = allowedQueue.map { buildMediaItem(it) }
@@ -434,36 +444,69 @@ class PlaybackManager private constructor(private val context: Context) {
         persistCurrentPlaybackSnapshot()
     }
 
+    fun play() {
+        val q = _queue.value
+        if (q.isEmpty()) return
+        _isStopped.value = false
+        if (exoPlayer.mediaItemCount == 0) {
+            val currentId = _currentTrack.value?.id
+            val idx = q.indexOfFirst { it.id == currentId }.coerceAtLeast(0)
+            exoPlayer.setMediaItems(q.map { buildMediaItem(it) }, idx, _currentPositionMs.value.coerceAtLeast(0L))
+        }
+        if (exoPlayer.playbackState == Player.STATE_IDLE) {
+            exoPlayer.prepare()
+        } else if (exoPlayer.playbackState == Player.STATE_ENDED) {
+            exoPlayer.seekTo(0L)
+        }
+        exoPlayer.play()
+    }
+
+    fun stopPlaybackPreservingQueue() {
+        _isStopped.value = true
+        _isPlaying.value = false
+        exoPlayer.playWhenReady = false
+        exoPlayer.pause()
+        exoPlayer.seekTo(0L)
+        _currentPositionMs.value = 0L
+        persistCurrentPlaybackSnapshot()
+        exoPlayer.stop()
+    }
+
     fun togglePlayPause() {
         if (exoPlayer.isPlaying) {
-            exoPlayer.pause()
+            pause()
         } else {
-            if (exoPlayer.playbackState == Player.STATE_ENDED) {
-                exoPlayer.seekTo(0L)
-            }
-            exoPlayer.play()
+            play()
         }
     }
 
     fun pause() {
-        if (exoPlayer.isPlaying) {
+        if (exoPlayer.isPlaying || exoPlayer.playWhenReady) {
             exoPlayer.pause()
         }
+        _isStopped.value = false
     }
 
     fun seekTo(positionMs: Long) {
-        exoPlayer.seekTo(positionMs)
-        _currentPositionMs.value = positionMs
+        val dur = _durationMs.value.takeIf { it > 0L } ?: Long.MAX_VALUE
+        val clamped = positionMs.coerceIn(0L, dur)
+        if (exoPlayer.playbackState == Player.STATE_IDLE && _queue.value.isNotEmpty()) {
+            exoPlayer.prepare()
+        }
+        exoPlayer.seekTo(clamped)
+        _currentPositionMs.value = clamped
     }
 
     fun seekBackward(incrementMs: Long = 10_000L) {
-        val target = (exoPlayer.currentPosition - incrementMs).coerceAtLeast(0L)
+        val current = if (_isStopped.value) _currentPositionMs.value else exoPlayer.currentPosition.coerceAtLeast(0L)
+        val target = (current - incrementMs).coerceAtLeast(0L)
         seekTo(target)
     }
 
     fun seekForward(incrementMs: Long = 10_000L) {
-        val dur = exoPlayer.duration.takeIf { it > 0L } ?: Long.MAX_VALUE
-        val target = (exoPlayer.currentPosition + incrementMs).coerceAtMost(dur)
+        val current = if (_isStopped.value) _currentPositionMs.value else exoPlayer.currentPosition.coerceAtLeast(0L)
+        val dur = exoPlayer.duration.takeIf { it > 0L } ?: _durationMs.value.takeIf { it > 0L } ?: Long.MAX_VALUE
+        val target = (current + incrementMs).coerceAtMost(dur)
         seekTo(target)
     }
 
@@ -483,23 +526,37 @@ class PlaybackManager private constructor(private val context: Context) {
         exoPlayer.pause()
         exoPlayer.stop()
         _isPlaying.value = false
+        _isStopped.value = true
     }
 
     fun skipToNext() {
+        _isStopped.value = false
+        if (exoPlayer.playbackState == Player.STATE_IDLE && exoPlayer.mediaItemCount > 0) {
+            exoPlayer.prepare()
+        }
         if (exoPlayer.hasNextMediaItem()) {
             exoPlayer.seekToNextMediaItem()
             exoPlayer.play()
-        } else if (_repeatMode.value == Player.REPEAT_MODE_ALL && _queue.value.isNotEmpty()) {
-            exoPlayer.seekTo(0, 0L)
-            exoPlayer.play()
+        } else if (_queue.value.size > 1 || _repeatMode.value == Player.REPEAT_MODE_ALL) {
+            if (_queue.value.isNotEmpty()) {
+                exoPlayer.seekTo(0, 0L)
+                exoPlayer.play()
+            }
         }
     }
 
-    fun skipToPrevious() {
-        if (exoPlayer.currentPosition > 3000L) {
+    fun skipToPrevious(forcePreviousTrack: Boolean = false) {
+        _isStopped.value = false
+        if (exoPlayer.playbackState == Player.STATE_IDLE && exoPlayer.mediaItemCount > 0) {
+            exoPlayer.prepare()
+        }
+        if (!forcePreviousTrack && exoPlayer.currentPosition > 3000L) {
             exoPlayer.seekTo(0L)
         } else if (exoPlayer.hasPreviousMediaItem()) {
             exoPlayer.seekToPreviousMediaItem()
+            exoPlayer.play()
+        } else if (_queue.value.size > 1 && (_repeatMode.value == Player.REPEAT_MODE_ALL || forcePreviousTrack)) {
+            exoPlayer.seekTo(_queue.value.lastIndex, 0L)
             exoPlayer.play()
         } else {
             exoPlayer.seekTo(0L)
@@ -507,7 +564,7 @@ class PlaybackManager private constructor(private val context: Context) {
     }
 
     fun playNext() = skipToNext()
-    fun playPrevious() = skipToPrevious()
+    fun playPrevious() = skipToPrevious(forcePreviousTrack = false)
 
     fun toggleShuffle() {
         val newShuffle = !_isShuffleEnabled.value
@@ -540,10 +597,17 @@ class PlaybackManager private constructor(private val context: Context) {
         }
     }
 
-    fun setPlayerStyle(style: PlayerStyle) {
-        _playerStyle.value = style
+    fun setCassetteStyle(style: CassetteStyle) {
+        _cassetteStyle.value = style
         applicationScope.launch(Dispatchers.IO) {
-            settingsRepository.setPlayerStyle(style)
+            settingsRepository.setCassetteStyle(style)
+        }
+    }
+
+    fun setWalkmanMechanicalSounds(enabled: Boolean) {
+        _walkmanMechanicalSounds.value = enabled
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setWalkmanMechanicalSounds(enabled)
         }
     }
 

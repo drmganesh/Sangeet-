@@ -509,7 +509,7 @@ fun AnimatedFeaturedSpotlightCard(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(220.dp)
+                .height(262.dp)
                 .clip(RoundedCornerShape(24.dp))
         ) {
             SpotlightArtworkTransitionHost(
@@ -520,43 +520,25 @@ fun AnimatedFeaturedSpotlightCard(
                 isAppResumed = isAppResumed,
                 shape = RoundedCornerShape(24.dp),
                 modifier = Modifier.fillMaxSize(),
-                artworkLayer = { track ->
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        // Subtle background depth layer with gentle counter-movement
-                        if (motion.parallaxActive) {
-                            TrackArtwork(
-                                track = track,
-                                shape = RoundedCornerShape(24.dp),
-                                crossfadeDurationMs = 0,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .graphicsLayer {
-                                        val depthScale = 1.18f
-                                        scaleX = depthScale
-                                        scaleY = depthScale
-                                        translationX = -kenBurnsPanX * 0.45f
-                                        translationY = (-scrollParallaxNormalized * motion.parallaxMaxShiftPx * 0.5f) -
-                                            (kenBurnsPanY * 0.45f)
-                                        alpha = 0.45f
-                                    }
-                            )
-                        }
+                artworkLayer = { targetTrack ->
+                    val displayTrack = targetTrack ?: featuredTrack
+                    val shouldSpinReels = isFeaturedPlaying && isSpotlightVisible && isAppResumed &&
+                        displayTrack.id == featuredTrack.id
+                    val seedAngle = remember(displayTrack.id) { ((displayTrack.id * 53L) % 360L).toFloat() }
+                    val reelAngle by rememberVisibleCassetteReelAngle(
+                        isActivelyPlayingAndVisible = shouldSpinReels,
+                        seedAngleDegrees = seedAngle
+                    )
 
-                        // Primary hero artwork with Ken Burns slow zoom + pan + scroll parallax
-                        TrackArtwork(
-                            track = track,
-                            shape = RoundedCornerShape(24.dp),
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        // Subtle album artwork ambient aura backdrop behind the cassette
+                        CassettePrintedArtImage(
+                            track = displayTrack,
                             crossfadeDurationMs = 0,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .graphicsLayer {
-                                    val activeZoom = if (motion.kenBurnsActive) {
-                                        kenBurnsZoom
-                                    } else if (motion.parallaxActive) {
-                                        1.06f
-                                    } else {
-                                        1.0f
-                                    }
+                                    val activeZoom = if (motion.kenBurnsActive) kenBurnsZoom else 1.06f
                                     scaleX = activeZoom
                                     scaleY = activeZoom
                                     translationX = if (motion.kenBurnsActive) kenBurnsPanX else 0f
@@ -567,10 +549,26 @@ fun AnimatedFeaturedSpotlightCard(
                                         0f
                                     }
                                     translationY = kbY + paraY
+                                    alpha = 0.28f
                                 }
                         )
 
-                        // Subtle animated diagonal ambient lighting sheen
+                        // Deep AMOLED & warm golden spotlight vignette
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(
+                                            Color(0xFF0A0906).copy(alpha = 0.72f),
+                                            Color(0xFF050506).copy(alpha = 0.62f),
+                                            Color.Black.copy(alpha = 0.94f)
+                                        )
+                                    )
+                                )
+                        )
+
+                        // Subtle animated diagonal ambient golden lighting sheen
                         if (motion.ambientLightingActive && isSpotlightVisible) {
                             Box(
                                 modifier = Modifier
@@ -579,8 +577,8 @@ fun AnimatedFeaturedSpotlightCard(
                                         Brush.linearGradient(
                                             colors = listOf(
                                                 Color.Transparent,
-                                                primaryColor.copy(alpha = motion.ambientLightAlpha * 0.55f),
-                                                Color.White.copy(alpha = motion.ambientLightAlpha * 0.25f),
+                                                Color(0xFFE8B429).copy(alpha = motion.ambientLightAlpha * 0.48f),
+                                                Color.White.copy(alpha = motion.ambientLightAlpha * 0.16f),
                                                 Color.Transparent
                                             ),
                                             start = Offset((lightSweep - 0.5f) * 900f, 0f),
@@ -590,20 +588,34 @@ fun AnimatedFeaturedSpotlightCard(
                             )
                         }
 
-                        // Rich legibility scrim overlay (keeps title, artist, and Play CTA crisp)
+                        // Oversized Realistic Black & Golden-Yellow Cassette Tape with Printed Album Art
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .background(
-                                    Brush.verticalGradient(
-                                        listOf(
-                                            Color.Black.copy(alpha = 0.14f),
-                                            Color.Black.copy(alpha = 0.5f),
-                                            Color.Black.copy(alpha = 0.94f)
-                                        )
-                                    )
-                                )
-                        )
+                                .padding(start = 18.dp, end = 18.dp, top = 46.dp, bottom = 74.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CassetteArtwork(
+                                track = displayTrack,
+                                isPlaying = shouldSpinReels,
+                                reelAngleDegrees = reelAngle,
+                                showMetadataOnLabel = true,
+                                compact = false,
+                                crossfadeDurationMs = 0,
+                                modifier = Modifier
+                                    .fillMaxHeight(0.96f)
+                                    .aspectRatio(1.56f)
+                                    .graphicsLayer {
+                                        rotationZ = if (motion.isEnabled) -1.6f else 0f
+                                        translationY = if (motion.parallaxActive) {
+                                            scrollParallaxNormalized * 4f
+                                        } else {
+                                            0f
+                                        }
+                                    }
+                                    .testTag("featured_cassette_artwork")
+                            )
+                        }
                     }
                 },
                 overlayChrome = { shownTrack, metadataAlpha ->
@@ -611,7 +623,7 @@ fun AnimatedFeaturedSpotlightCard(
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(18.dp),
+                            .padding(16.dp),
                         verticalArrangement = Arrangement.SpaceBetween
                     ) {
                         Row(
@@ -621,15 +633,15 @@ fun AnimatedFeaturedSpotlightCard(
                         ) {
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.primary
+                                color = Color(0xFFE8B429)
                             ) {
                                 Text(
                                     text = "FEATURED SPOTLIGHT",
                                     style = MaterialTheme.typography.labelSmall.copy(
-                                        fontWeight = FontWeight.Bold,
+                                        fontWeight = FontWeight.Black,
                                         letterSpacing = 1.sp
                                     ),
-                                    color = MaterialTheme.colorScheme.onPrimary,
+                                    color = Color.Black,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                 )
                             }
@@ -650,7 +662,7 @@ fun AnimatedFeaturedSpotlightCard(
                                                 .clip(CircleShape)
                                                 .background(
                                                     if (activeDot) {
-                                                        MaterialTheme.colorScheme.primary
+                                                        Color(0xFFFFD666)
                                                     } else {
                                                         Color.White.copy(alpha = 0.42f)
                                                     }
@@ -683,7 +695,7 @@ fun AnimatedFeaturedSpotlightCard(
                                 Text(
                                     text = "${displayTrack.artist} • ${displayTrack.album}",
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = Color.White.copy(alpha = 0.8f),
+                                    color = Color(0xFFFFD666).copy(alpha = 0.9f),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.testTag("spotlight_subtitle")
@@ -693,7 +705,7 @@ fun AnimatedFeaturedSpotlightCard(
                             FilledIconButton(
                                 onClick = onPlayFeatured,
                                 colors = IconButtonDefaults.filledIconButtonColors(
-                                    containerColor = MaterialTheme.colorScheme.primary
+                                    containerColor = Color(0xFFE8B429)
                                 ),
                                 modifier = Modifier
                                     .size(52.dp)
@@ -702,7 +714,7 @@ fun AnimatedFeaturedSpotlightCard(
                                 Icon(
                                     imageVector = if (isFeaturedPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                                     contentDescription = if (isFeaturedPlaying) "Pause" else "Play",
-                                    tint = MaterialTheme.colorScheme.onPrimary,
+                                    tint = Color.Black,
                                     modifier = Modifier.size(28.dp)
                                 )
                             }
@@ -723,7 +735,11 @@ fun AnimatedQuickPickCard(
     breathingPhaseState: State<Float>,
     rowState: LazyListState,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isAudioPlaying: Boolean = false,
+    isSectionVisible: Boolean = true,
+    titleOverride: String? = null,
+    subtitleOverride: String? = null
 ) {
     val coroutineScope = rememberCoroutineScope()
     val interactionSource = remember { MutableInteractionSource() }
@@ -758,17 +774,6 @@ fun AnimatedQuickPickCard(
         label = "quickPickTapScale"
     )
 
-    val cardElevation by animateDpAsState(
-        targetValue = when {
-            !motion.isEnabled -> 0.dp
-            isPressed -> 2.dp
-            isOpening || isCurrentlyPlaying -> 10.dp
-            else -> 4.dp
-        },
-        animationSpec = tween(durationMillis = 200),
-        label = "quickPickElevation"
-    )
-
     // Smooth horizontal carousel edge focus factor (GPU-only inside graphicsLayer)
     val viewportCenterFocus by remember(rowState, track.id) {
         derivedStateOf {
@@ -787,7 +792,7 @@ fun AnimatedQuickPickCard(
 
     Surface(
         modifier = modifier
-            .width(140.dp)
+            .width(152.dp)
             .graphicsLayer {
                 val entry = entranceProgress.value
                 val edgeScale = if (motion.isEnabled) 0.94f + 0.06f * viewportCenterFocus else 1f
@@ -802,7 +807,7 @@ fun AnimatedQuickPickCard(
                 scaleY = finalScale
                 translationY = ((1f - entry) * 14f) + breatheOffset
             }
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(16.dp))
             .clickable(
                 interactionSource = interactionSource,
                 indication = ripple()
@@ -818,51 +823,45 @@ fun AnimatedQuickPickCard(
                     onClick()
                 }
             },
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         color = Color.Transparent
     ) {
         Column(horizontalAlignment = Alignment.Start) {
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                shadowElevation = cardElevation,
-                border = if (isCurrentlyPlaying) {
-                    BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.8f))
-                } else {
-                    null
+            AnimatedContent(
+                targetState = track,
+                contentKey = { it.id },
+                transitionSpec = {
+                    if (motion.trackTransitionsActive && motion.transitionDurationMs > 0) {
+                        (fadeIn(tween(motion.transitionDurationMs)) + scaleIn(initialScale = 0.94f))
+                            .togetherWith(fadeOut(tween((motion.transitionDurationMs * 0.7f).toInt())))
+                    } else {
+                        EnterTransition.None.togetherWith(ExitTransition.None)
+                    }
                 },
-                color = Color.Transparent
-            ) {
-                AnimatedContent(
-                    targetState = track,
-                    contentKey = { it.id },
-                    transitionSpec = {
-                        if (motion.trackTransitionsActive && motion.transitionDurationMs > 0) {
-                            (fadeIn(tween(motion.transitionDurationMs)) + scaleIn(initialScale = 0.94f))
-                                .togetherWith(fadeOut(tween((motion.transitionDurationMs * 0.7f).toInt())))
-                        } else {
-                            EnterTransition.None.togetherWith(ExitTransition.None)
-                        }
-                    },
-                    label = "quick_pick_art"
-                ) { targetTrack ->
-                    TrackArtwork(
-                        track = targetTrack,
-                        modifier = Modifier.size(130.dp),
-                        shape = RoundedCornerShape(18.dp),
-                        crossfadeDurationMs = if (motion.isEnabled) motion.transitionDurationMs else 0
-                    )
-                }
+                label = "quick_pick_cassette"
+            ) { targetTrack ->
+                CassetteArtworkCard(
+                    track = targetTrack,
+                    isCurrentlyPlaying = isCurrentlyPlaying,
+                    isAudioPlaying = isAudioPlaying,
+                    isVisible = isSectionVisible,
+                    crossfadeDurationMs = if (motion.isEnabled) motion.transitionDurationMs else 0,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(106.dp)
+                        .testTag("quick_pick_cassette_${targetTrack.id}")
+                )
             }
             Spacer(Modifier.height(8.dp))
             Text(
-                text = track.title,
+                text = titleOverride ?: track.title,
                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                color = if (isCurrentlyPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                color = if (isCurrentlyPlaying) Color(0xFFFFD666) else MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = track.artist,
+                text = subtitleOverride ?: track.artist,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
