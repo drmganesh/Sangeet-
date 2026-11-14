@@ -92,13 +92,17 @@ class MediaScanner(private val context: Context) {
                     val prev = existingById[id]
                     val genre = prev?.genre?.takeIf { it.isNotBlank() && it != "Music" } ?: run {
                         var g = "Music"
+                        val retriever = MediaMetadataRetriever()
                         try {
-                            val retriever = MediaMetadataRetriever()
                             retriever.setDataSource(context, Uri.parse(contentUri))
                             val extractedGenre = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE)
                             if (!extractedGenre.isNullOrBlank()) g = extractedGenre
-                            retriever.release()
-                        } catch (_: Exception) {}
+                        } catch (_: Exception) {
+                        } finally {
+                            try {
+                                retriever.release()
+                            } catch (_: Exception) {}
+                        }
                         g
                     }
 
@@ -457,15 +461,19 @@ class MediaScanner(private val context: Context) {
             var artist = "Local Storage"
             var album = "Imported"
             var title = fileName.substringBeforeLast(".")
+            val retriever = MediaMetadataRetriever()
             try {
-                val retriever = MediaMetadataRetriever()
                 retriever.setDataSource(context, uri)
                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)?.let { if (it.isNotBlank()) title = it }
                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)?.let { if (it.isNotBlank()) artist = it }
                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)?.let { if (it.isNotBlank()) album = it }
                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()?.let { duration = it }
-                retriever.release()
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+            } finally {
+                try {
+                    retriever.release()
+                } catch (_: Exception) {}
+            }
 
             val track = AudioTrack(
                 id = System.currentTimeMillis() xor uri.hashCode().toLong(),

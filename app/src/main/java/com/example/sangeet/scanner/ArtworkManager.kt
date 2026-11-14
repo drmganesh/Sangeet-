@@ -7,20 +7,21 @@ import android.util.Log
 import com.example.sangeet.data.local.AppDatabase
 import com.example.sangeet.data.model.AlbumArtworkEntry
 import com.example.sangeet.data.model.AudioTrack
+import com.example.sangeet.ui.components.ArtworkPathCache
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 
 class ArtworkManager(private val context: Context) {
 
-    private val db = AppDatabase.getInstance(context)
+    private val appContext = context.applicationContext
+    private val db = AppDatabase.getInstance(appContext)
     private val artworkDao = db.artworkDao()
-    private val cacheDir = File(context.cacheDir, "artwork_cache").apply { mkdirs() }
+    private val cacheDir = File(appContext.cacheDir, "artwork_cache").apply { mkdirs() }
 
     private val folderArtworkNames = listOf(
         "cover.jpg", "cover.jpeg", "cover.png",
@@ -35,62 +36,129 @@ class ArtworkManager(private val context: Context) {
         return "${a}_$al"
     }
 
+    private fun getCacheKeyForTrack(track: AudioTrack): String {
+        val albumTrimmed = track.album.trim()
+        val isGenericAlbum = albumTrimmed.isBlank() ||
+            albumTrimmed.equals("Unknown Album", ignoreCase = true) ||
+            albumTrimmed.equals("<unknown>", ignoreCase = true)
+        return if (isGenericAlbum) {
+            "track_${track.id}"
+        } else {
+            getAlbumKey(track.artist, track.album)
+        }
+    }
+
     /**
      * Resolves the artwork path or URI for an AudioTrack using priority:
      * 1. Track's explicit artworkUri (if non-empty)
-     * 2. Custom or cached database record for the album
-     * 3. Extracted embedded ID3/FLAC/M4A/OGG picture
-     * 4. Sibling folder cover image (cover.jpg, folder.jpg, etc.)
+     * 2. In-memory positive / negative cache + concurrent in-flight deduplication
+     * 3. Custom or cached database record for the album
+     * 4. Extracted embedded ID3/FLAC/M4A/OGG picture (only when EmbeddedArtworkProbe confirms presence)
+     * 5. Sibling folder cover image (cover.jpg, folder.jpg, etc.)
      */
     suspend fun resolveArtwork(track: AudioTrack): String? = withContext(Dispatchers.IO) {
         // 1. Direct track artworkUri
         if (track.artworkUri.isNotBlank()) {
+            ArtworkPathCache.put(track.id, track.artworkUri)
             return@withContext track.artworkUri
         }
 
-        val albumKey = getAlbumKey(track.artist, track.album)
-
-        // 2. Database entry (custom user-chosen or cached)
-        val entry = artworkDao.getArtwork(albumKey)
-        if (entry != null && File(entry.artworkPath).exists()) {
-            return@withContext entry.artworkPath
-        } else if (entry != null && entry.artworkPath.startsWith("content://")) {
-            return@withContext entry.artworkPath
+        // 2. Fast in-memory positive & negative caches
+        ArtworkPathCache.get(track.id)?.let { cachedPath ->
+            if (cachedPath.startsWith("content://") || File(cachedPath).exists()) {
+                return@withContext cachedPath
+            }
+        }
+        if (negativeTrackCache.contains(track.id) || ArtworkPathCache.isKnownMissing(track.id)) {
+            return@withContext null
         }
 
-        // 3. Cached extracted file
-        val hash = md5(albumKey)
+        // 3. Deduplicate concurrent lookups for the same track (e.g., Featured Spotlight + Quick Picks)
+        val newDeferred = CompletableDeferred<String?>()
+        val existingDeferred = inFlightByTrackId.putIfAbsent(track.id, newDeferred)
+        if (existingDeferred != null) {
+            return@withContext existingDeferred.await()
+        }
+
+        try {
+            val resolved = resolveArtworkInternal(track)
+            if (!resolved.isNullOrBlank()) {
+                ArtworkPathCache.put(track.id, resolved)
+            } else {
+                negativeTrackCache.add(track.id)
+                ArtworkPathCache.markNoArtwork(track.id)
+            }
+            newDeferred.complete(resolved)
+            resolved
+        } catch (t: Throwable) {
+            newDeferred.complete(null)
+            null
+        } finally {
+            inFlightByTrackId.remove(track.id, newDeferred)
+        }
+    }
+
+    private suspend fun resolveArtworkInternal(track: AudioTrack): String? {
+        val albumKey = getAlbumKey(track.artist, track.album)
+        val cacheKey = getCacheKeyForTrack(track)
+
+        // Check custom/cached DB entry (honor explicit album-level custom entries first)
+        val customOrAlbumEntry = artworkDao.getArtwork(albumKey)
+            ?: if (cacheKey != albumKey) artworkDao.getArtwork(cacheKey) else null
+        if (customOrAlbumEntry != null) {
+            if (customOrAlbumEntry.artworkPath.startsWith("content://") ||
+                File(customOrAlbumEntry.artworkPath).exists()
+            ) {
+                return customOrAlbumEntry.artworkPath
+            }
+        }
+
+        // Cached extracted file
+        val hash = md5(cacheKey)
         val cachedFile = File(cacheDir, "art_$hash.jpg")
         if (cachedFile.exists() && cachedFile.length() > 0) {
             val path = cachedFile.absolutePath
-            artworkDao.insertArtwork(AlbumArtworkEntry(albumKey, path, isCustom = false))
-            return@withContext path
+            artworkDao.insertArtwork(AlbumArtworkEntry(cacheKey, path, isCustom = false))
+            return path
         }
 
-        // 4. Try extracting embedded picture
-        val embeddedFile = extractEmbeddedArtwork(track, cachedFile)
+        // Probe container headers before invoking MediaMetadataRetriever.getEmbeddedPicture()
+        // so tracks without embedded art never emit native MediaMetadataRetrieverJNI error logs.
+        val embeddedFile = if (
+            EmbeddedArtworkProbe.mightContainEmbeddedArtwork(
+                context = appContext,
+                contentUri = track.contentUri,
+                filePath = track.path,
+                mimeType = track.mimeType
+            )
+        ) {
+            extractEmbeddedArtwork(track, cachedFile)
+        } else {
+            null
+        }
+
         if (embeddedFile != null) {
             val path = embeddedFile.absolutePath
-            artworkDao.insertArtwork(AlbumArtworkEntry(albumKey, path, isCustom = false))
-            return@withContext path
+            artworkDao.insertArtwork(AlbumArtworkEntry(cacheKey, path, isCustom = false))
+            return path
         }
 
-        // 5. Try sibling folder artwork
+        // Try sibling folder artwork
         val folderArt = findFolderArtwork(track.path)
         if (folderArt != null) {
             val path = folderArt.absolutePath
-            artworkDao.insertArtwork(AlbumArtworkEntry(albumKey, path, isCustom = false))
-            return@withContext path
+            artworkDao.insertArtwork(AlbumArtworkEntry(cacheKey, path, isCustom = false))
+            return path
         }
 
-        null
+        return null
     }
 
     private fun extractEmbeddedArtwork(track: AudioTrack, targetFile: File): File? {
         val retriever = MediaMetadataRetriever()
         try {
             if (track.contentUri.isNotBlank() && track.contentUri.startsWith("content://")) {
-                retriever.setDataSource(context, Uri.parse(track.contentUri))
+                retriever.setDataSource(appContext, Uri.parse(track.contentUri))
             } else if (track.path.isNotBlank() && File(track.path).exists()) {
                 retriever.setDataSource(track.path)
             } else {
@@ -152,21 +220,32 @@ class ArtworkManager(private val context: Context) {
                 updatedAt = System.currentTimeMillis()
             )
         )
+        negativeTrackCache.clear()
+        ArtworkPathCache.clear()
     }
 
     suspend fun removeCustomArtwork(artist: String, album: String) = withContext(Dispatchers.IO) {
         val albumKey = getAlbumKey(artist, album)
         artworkDao.deleteArtwork(albumKey)
+        negativeTrackCache.clear()
+        ArtworkPathCache.clear()
     }
 
     suspend fun clearArtworkCache() = withContext(Dispatchers.IO) {
         cacheDir.listFiles()?.forEach { it.delete() }
         artworkDao.clearAll()
+        negativeTrackCache.clear()
+        ArtworkPathCache.clear()
     }
 
     private fun md5(input: String): String {
         val md = MessageDigest.getInstance("MD5")
         val digested = md.digest(input.toByteArray())
         return digested.joinToString("") { "%02x".format(it) }
+    }
+
+    companion object {
+        private val inFlightByTrackId = ConcurrentHashMap<Long, CompletableDeferred<String?>>()
+        private val negativeTrackCache = ConcurrentHashMap.newKeySet<Long>()
     }
 }

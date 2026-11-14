@@ -1,5 +1,6 @@
 package com.example.sangeet.ui.components
 
+import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -41,17 +42,44 @@ fun TrackArtwork(
     track: AudioTrack?,
     modifier: Modifier = Modifier,
     shape: Shape = RoundedCornerShape(16.dp),
-    contentDescription: String? = "Album Artwork"
+    contentDescription: String? = "Album Artwork",
+    crossfadeDurationMs: Int = 300
 ) {
     val context = LocalContext.current
     var resolvedPath by remember(track?.id, track?.artworkUri) {
-        mutableStateOf<String?>(track?.artworkUri?.takeIf { it.isNotBlank() })
+        val direct = track?.artworkUri?.takeIf { it.isNotBlank() }
+        val cached = track?.id?.let { ArtworkPathCache.get(it) }
+        mutableStateOf(direct ?: cached)
     }
 
-    LaunchedEffect(track?.id) {
-        if (track != null && (resolvedPath == null || resolvedPath!!.isBlank())) {
+    LaunchedEffect(track?.id, track?.artworkUri) {
+        if (track != null && resolvedPath.isNullOrBlank() && !ArtworkPathCache.isKnownMissing(track.id)) {
             val artManager = ArtworkManager(context)
-            resolvedPath = artManager.resolveArtwork(track)
+            val resolved = artManager.resolveArtwork(track)
+            if (!resolved.isNullOrBlank()) {
+                ArtworkPathCache.put(track.id, resolved)
+                resolvedPath = resolved
+            } else {
+                ArtworkPathCache.markNoArtwork(track.id)
+            }
+        }
+    }
+
+    val imageRequest = remember(track?.id, resolvedPath, crossfadeDurationMs) {
+        if (resolvedPath.isNullOrBlank() || track == null) {
+            null
+        } else {
+            val modelData: Any = if (resolvedPath!!.startsWith("content://")) {
+                Uri.parse(resolvedPath)
+            } else {
+                File(resolvedPath!!)
+            }
+            ImageRequest.Builder(context)
+                .data(modelData)
+                .memoryCacheKey("track_art_${track.id}")
+                .diskCacheKey("track_art_${track.id}")
+                .crossfade(crossfadeDurationMs.coerceAtLeast(0))
+                .build()
         }
     }
 
@@ -68,12 +96,9 @@ fun TrackArtwork(
             ),
         contentAlignment = Alignment.Center
     ) {
-        if (!resolvedPath.isNullOrBlank()) {
+        if (imageRequest != null) {
             AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(if (resolvedPath!!.startsWith("content://")) Uri.parse(resolvedPath) else File(resolvedPath!!))
-                    .crossfade(true)
-                    .build(),
+                model = imageRequest,
                 contentDescription = contentDescription,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -97,9 +122,36 @@ fun MiniPlayer(
     onTogglePlayPause: () -> Unit,
     onNext: () -> Unit,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    animationPrefs: ArtworkAnimationPreferencesSnapshot = ArtworkAnimationPreferencesSnapshot()
 ) {
     if (currentTrack == null) return
+
+    val motion = rememberEffectiveArtworkMotion(animationPrefs)
+    val isAppResumed by rememberIsAppResumed()
+    val shouldBreathe = isPlaying && isAppResumed && motion.cardBreathingActive
+
+    val breathingScale: Float = if (shouldBreathe) {
+        val transition = rememberInfiniteTransition(label = "mini_art_breathe")
+        val anim by transition.animateFloat(
+            initialValue = 1.0f,
+            targetValue = 1.0f + (0.025f * (motion.zoomMaxScale - 1f) / 0.065f).coerceIn(0.01f, 0.045f),
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 2200, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "miniArtScale"
+        )
+        anim
+    } else {
+        1.0f
+    }
+
+    val glowAlpha by animateFloatAsState(
+        targetValue = if (isPlaying && motion.isEnabled) 0.55f else 0f,
+        animationSpec = tween(durationMillis = 320),
+        label = "miniGlowAlpha"
+    )
 
     Surface(
         modifier = modifier
@@ -129,12 +181,56 @@ fun MiniPlayer(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Album Art
-                TrackArtwork(
-                    track = currentTrack,
-                    modifier = Modifier.size(46.dp),
-                    shape = RoundedCornerShape(12.dp)
-                )
+                // Synchronized Album Art (only animates when track ID actually changes)
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .graphicsLayer {
+                            scaleX = breathingScale
+                            scaleY = breathingScale
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (glowAlpha > 0.02f) {
+                        Box(
+                            modifier = Modifier
+                                .matchParentSize()
+                                .clip(RoundedCornerShape(13.dp))
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = glowAlpha * 0.28f))
+                        )
+                    }
+                    AnimatedContent(
+                        targetState = currentTrack,
+                        contentKey = { it.id },
+                        transitionSpec = {
+                            if (motion.trackTransitionsActive && motion.transitionDurationMs > 0) {
+                                (fadeIn(
+                                    animationSpec = tween(motion.transitionDurationMs, easing = FastOutSlowInEasing)
+                                ) + scaleIn(
+                                    initialScale = 0.88f,
+                                    animationSpec = tween(motion.transitionDurationMs, easing = FastOutSlowInEasing)
+                                )).togetherWith(
+                                    fadeOut(
+                                        animationSpec = tween((motion.transitionDurationMs * 0.7f).toInt())
+                                    ) + scaleOut(
+                                        targetScale = 0.92f,
+                                        animationSpec = tween((motion.transitionDurationMs * 0.7f).toInt())
+                                    )
+                                )
+                            } else {
+                                EnterTransition.None togetherWith ExitTransition.None
+                            }
+                        },
+                        label = "mini_player_artwork"
+                    ) { targetTrack ->
+                        TrackArtwork(
+                            track = targetTrack,
+                            modifier = Modifier.size(46.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            crossfadeDurationMs = if (motion.trackTransitionsActive) motion.transitionDurationMs else 0
+                        )
+                    }
+                }
 
                 Spacer(modifier = Modifier.width(12.dp))
 

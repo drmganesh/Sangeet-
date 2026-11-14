@@ -29,6 +29,8 @@ import com.example.sangeet.data.repository.MediaRepository
 import com.example.sangeet.data.repository.NotificationPreferencesSnapshot
 import com.example.sangeet.data.repository.SettingsRepository
 import com.example.sangeet.playback.PlaybackManager
+import com.example.sangeet.ui.components.ArtworkAnimationPreferencesSnapshot
+import com.example.sangeet.ui.components.ArtworkPathCache
 import com.example.ui.theme.AccentColor
 import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.launch
@@ -46,6 +48,7 @@ fun SettingsScreen(
     onNavigateToSpatial: () -> Unit,
     onNavigateToHomeNavSettings: () -> Unit,
     onNavigateToNotificationSettings: () -> Unit,
+    onNavigateToArtworkAnimationSettings: () -> Unit,
     onNavigateToBlacklistWhitelist: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -68,6 +71,7 @@ fun SettingsScreen(
     val gaplessEnabled by settingsRepo.gaplessPlayback.collectAsState(initial = true)
     val artworkPriority by settingsRepo.artworkPriority.collectAsState(initial = "EMBEDDED_FIRST")
     val notifPrefs by settingsRepo.notificationPreferences.collectAsState(initial = NotificationPreferencesSnapshot())
+    val artAnimPrefs by settingsRepo.artworkAnimationPreferences.collectAsState(initial = ArtworkAnimationPreferencesSnapshot())
 
     var showClearHistoryDialog by remember { mutableStateOf(false) }
     var showSleepTimerDialog by remember { mutableStateOf(false) }
@@ -277,6 +281,38 @@ fun SettingsScreen(
                             .clickable { onNavigateToNotificationSettings() }
                             .testTag("settings_notification_btn")
                     )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+                    ListItem(
+                        headlineContent = { Text("Featured Album Animation") },
+                        supportingContent = {
+                            Text("${artAnimPrefs.spotlightTransitionStyle.label} • ${artAnimPrefs.spotlightTransitionSpeed.label} • ${artAnimPrefs.spotlightTransitionDirection.label}")
+                        },
+                        leadingContent = {
+                            Icon(Icons.Rounded.AutoAwesomeMotion, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        },
+                        trailingContent = {
+                            Icon(Icons.Rounded.ChevronRight, contentDescription = null)
+                        },
+                        modifier = Modifier
+                            .clickable { onNavigateToArtworkAnimationSettings() }
+                            .testTag("settings_featured_album_anim_btn")
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+                    ListItem(
+                        headlineContent = { Text("Home Artwork Animations") },
+                        supportingContent = {
+                            Text("${artAnimPrefs.style.label} style • ${artAnimPrefs.intensity.label} intensity")
+                        },
+                        leadingContent = {
+                            Icon(Icons.Rounded.Animation, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        },
+                        trailingContent = {
+                            Icon(Icons.Rounded.ChevronRight, contentDescription = null)
+                        },
+                        modifier = Modifier
+                            .clickable { onNavigateToArtworkAnimationSettings() }
+                            .testTag("settings_artwork_animations_btn")
+                    )
                 }
             }
         }
@@ -447,6 +483,7 @@ fun SettingsScreen(
                         OutlinedButton(
                             onClick = {
                                 coroutineScope.launch {
+                                    ArtworkPathCache.clear()
                                     repository.artworkManager.clearArtworkCache()
                                     Toast.makeText(context, "Artwork cache refreshed", Toast.LENGTH_SHORT).show()
                                 }

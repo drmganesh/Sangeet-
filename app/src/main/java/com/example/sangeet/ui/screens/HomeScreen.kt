@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -14,6 +16,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -30,7 +33,14 @@ import com.example.sangeet.data.model.AudioTrack
 import com.example.sangeet.data.repository.MediaRepository
 import com.example.sangeet.data.repository.SettingsRepository
 import com.example.sangeet.playback.PlaybackManager
+import com.example.sangeet.ui.components.AnimatedArtistCard
+import com.example.sangeet.ui.components.AnimatedFeaturedSpotlightCard
+import com.example.sangeet.ui.components.AnimatedQuickPickCard
+import com.example.sangeet.ui.components.ArtworkAnimationPreferencesSnapshot
 import com.example.sangeet.ui.components.TrackArtwork
+import com.example.sangeet.ui.components.rememberCarouselBreathingPhase
+import com.example.sangeet.ui.components.rememberEffectiveArtworkMotion
+import com.example.sangeet.ui.components.rememberIsAppResumed
 import kotlinx.coroutines.launch
 import java.util.Calendar
 
@@ -58,6 +68,61 @@ fun HomeScreen(
 
     val showGreeting by settingsRepo.showGreeting.collectAsState(initial = true)
     val spotlightHome by settingsRepo.spotlightHome.collectAsState(initial = true)
+    val animPrefs by settingsRepo.artworkAnimationPreferences.collectAsState(
+        initial = ArtworkAnimationPreferencesSnapshot()
+    )
+    val motion = rememberEffectiveArtworkMotion(animPrefs)
+    val isAppResumed by rememberIsAppResumed()
+    val currentlyPlayingTrack by playbackManager.currentTrack.collectAsState()
+    val isPlaying by playbackManager.isPlaying.collectAsState()
+
+    val featuredTracks = remember(favoriteTracks, allTracks) {
+        val combined = LinkedHashMap<Long, AudioTrack>()
+        favoriteTracks.forEach { combined[it.id] = it }
+        // Prioritize distinct albums so swiping showcases distinct album covers when available
+        val seenAlbums = mutableSetOf<String>()
+        favoriteTracks.forEach { seenAlbums.add(it.album.trim().lowercase()) }
+        allTracks.forEach { track ->
+            val albumKey = track.album.trim().lowercase()
+            if (albumKey.isNotBlank() && seenAlbums.add(albumKey)) {
+                combined[track.id] = track
+            }
+        }
+        allTracks.forEach { track ->
+            if (combined.size < 12) {
+                combined.putIfAbsent(track.id, track)
+            }
+        }
+        combined.values.take(12).toList()
+    }
+    var featuredIndex by rememberSaveable { mutableIntStateOf(0) }
+    var featuredNavDirection by remember { mutableIntStateOf(1) }
+
+    val listState = rememberLazyListState()
+    val isSpotlightVisible by remember {
+        derivedStateOf {
+            listState.layoutInfo.visibleItemsInfo.any { it.key == "featured_spotlight" }
+        }
+    }
+    val isQuickPicksVisible by remember {
+        derivedStateOf {
+            listState.layoutInfo.visibleItemsInfo.any { it.key == "quick_picks_section" }
+        }
+    }
+    val isLocalMixVisible by remember {
+        derivedStateOf {
+            listState.layoutInfo.visibleItemsInfo.any { it.key == "local_mix_section" }
+        }
+    }
+
+    val quickPicksTracks = remember(allTracks) { allTracks.take(8) }
+    val localMixTracks = remember(allTracks) { allTracks.shuffled().take(6) }
+    val artistTrackMap = remember(allTracks) {
+        allTracks.groupBy { it.artist.trim().lowercase() }
+            .mapValues { (_, list) ->
+                list.firstOrNull { it.artworkUri.isNotBlank() } ?: list.firstOrNull()
+            }
+    }
 
     val greeting = remember {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
@@ -69,6 +134,7 @@ fun HomeScreen(
     }
 
     LazyColumn(
+        state = listState,
         modifier = modifier
             .fillMaxSize()
             .testTag("home_screen"),
@@ -188,107 +254,54 @@ fun HomeScreen(
         // -------------------------------------------------------------
         // SPOTLIGHT HOME LAYOUT (Featured Hero + Rich Discovery Carousels)
         // -------------------------------------------------------------
-        if (spotlightHome && allTracks.isNotEmpty()) {
-            val featuredTrack = favoriteTracks.firstOrNull() ?: allTracks.first()
+        if (spotlightHome && featuredTracks.isNotEmpty()) {
+            val safeFeaturedIndex = featuredIndex.coerceIn(0, featuredTracks.lastIndex)
+            val featuredTrack = featuredTracks[safeFeaturedIndex]
+            val isFeaturedPlaying = currentlyPlayingTrack?.id == featuredTrack.id && isPlaying
 
-            // 1. Featured Music Hero Section
-            item {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp)
-                        .clickable { playbackManager.playTrack(featuredTrack, allTracks) }
-                        .testTag("spotlight_hero_card"),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                ) {
-                    Box(modifier = Modifier.fillMaxWidth().height(220.dp)) {
-                        TrackArtwork(
-                            track = featuredTrack,
-                            shape = RoundedCornerShape(24.dp),
-                            modifier = Modifier.fillMaxSize()
-                        )
-                        // Gradient Overlay
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(
-                                    Brush.verticalGradient(
-                                        listOf(
-                                            Color.Transparent,
-                                            Color.Black.copy(alpha = 0.5f),
-                                            Color.Black.copy(alpha = 0.95f)
-                                        )
-                                    )
-                                )
-                        )
-
-                        // Hero Content
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(18.dp),
-                            verticalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.primary
-                            ) {
-                                Text(
-                                    text = "FEATURED SPOTLIGHT",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        letterSpacing = 1.sp
-                                    ),
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                )
-                            }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.Bottom
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = featuredTrack.title,
-                                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                                        color = Color.White,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = "${featuredTrack.artist} • ${featuredTrack.album}",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = Color.White.copy(alpha = 0.8f),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-
-                                FilledIconButton(
-                                    onClick = { playbackManager.playTrack(featuredTrack, allTracks) },
-                                    colors = IconButtonDefaults.filledIconButtonColors(
-                                        containerColor = MaterialTheme.colorScheme.primary
-                                    ),
-                                    modifier = Modifier.size(52.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Rounded.PlayArrow,
-                                        contentDescription = "Play",
-                                        tint = MaterialTheme.colorScheme.onPrimary,
-                                        modifier = Modifier.size(28.dp)
-                                    )
-                                }
-                            }
+            // 1. Featured Music Hero Section (Slide, Fade, 3D Page Turn, Ken Burns, Parallax, Swipe)
+            item(key = "featured_spotlight") {
+                AnimatedFeaturedSpotlightCard(
+                    featuredTrack = featuredTrack,
+                    motion = motion,
+                    isSpotlightVisible = isSpotlightVisible,
+                    isAppResumed = isAppResumed,
+                    listState = listState,
+                    itemKey = "featured_spotlight",
+                    navigationDirection = featuredNavDirection,
+                    isFeaturedPlaying = isFeaturedPlaying,
+                    featuredCount = featuredTracks.size,
+                    featuredIndex = safeFeaturedIndex,
+                    onSwipeNext = {
+                        if (featuredTracks.size > 1) {
+                            featuredNavDirection = 1
+                            featuredIndex = (safeFeaturedIndex + 1) % featuredTracks.size
+                        }
+                    },
+                    onSwipePrevious = {
+                        if (featuredTracks.size > 1) {
+                            featuredNavDirection = -1
+                            featuredIndex = (safeFeaturedIndex - 1 + featuredTracks.size) % featuredTracks.size
+                        }
+                    },
+                    onPlayFeatured = {
+                        if (currentlyPlayingTrack?.id == featuredTrack.id) {
+                            playbackManager.togglePlayPause()
+                        } else {
+                            playbackManager.playTrack(featuredTrack, allTracks)
                         }
                     }
-                }
+                )
             }
 
             // Carousel: Quick Picks
-            item {
+            item(key = "quick_picks_section") {
+                val quickPicksRowState = rememberLazyListState()
+                val quickPicksPhase = rememberCarouselBreathingPhase(
+                    isSectionVisible = isQuickPicksVisible,
+                    isAppResumed = isAppResumed,
+                    isBreathingEnabled = motion.cardBreathingActive
+                )
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
                         text = "QUICK PICKS",
@@ -297,12 +310,18 @@ fun HomeScreen(
                         modifier = Modifier.padding(horizontal = 20.dp)
                     )
                     LazyRow(
+                        state = quickPicksRowState,
                         contentPadding = PaddingValues(horizontal = 20.dp),
                         horizontalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        items(allTracks.take(8)) { track ->
-                            HomeTrackCard(
+                        itemsIndexed(quickPicksTracks, key = { _, t -> t.id }) { index, track ->
+                            AnimatedQuickPickCard(
                                 track = track,
+                                index = index,
+                                isCurrentlyPlaying = currentlyPlayingTrack?.id == track.id,
+                                motion = motion,
+                                breathingPhaseState = quickPicksPhase,
+                                rowState = quickPicksRowState,
                                 onClick = { playbackManager.playTrack(track, allTracks) }
                             )
                         }
@@ -312,7 +331,9 @@ fun HomeScreen(
 
             // Carousel: Spotlight Artists
             if (allArtists.isNotEmpty()) {
-                item {
+                item(key = "spotlight_artists_section") {
+                    val artistRowState = rememberLazyListState()
+                    val visibleArtists = remember(allArtists) { allArtists.take(8) }
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(
                             text = "SPOTLIGHT ARTISTS",
@@ -321,44 +342,20 @@ fun HomeScreen(
                             modifier = Modifier.padding(horizontal = 20.dp)
                         )
                         LazyRow(
+                            state = artistRowState,
                             contentPadding = PaddingValues(horizontal = 20.dp),
                             horizontalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
-                            items(allArtists.take(8)) { artist ->
-                                Surface(
-                                    shape = RoundedCornerShape(16.dp),
-                                    color = MaterialTheme.colorScheme.surfaceVariant,
-                                    modifier = Modifier
-                                        .width(110.dp)
-                                        .clickable { onNavigateToLibrary() }
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(12.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(54.dp)
-                                                .clip(CircleShape)
-                                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                Icons.Rounded.Person,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(28.dp)
-                                            )
-                                        }
-                                        Spacer(Modifier.height(8.dp))
-                                        Text(
-                                            text = artist,
-                                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
+                            itemsIndexed(visibleArtists, key = { _, a -> a }) { index, artist ->
+                                AnimatedArtistCard(
+                                    artist = artist,
+                                    index = index,
+                                    representativeTrack = artistTrackMap[artist.trim().lowercase()],
+                                    isSelected = currentlyPlayingTrack?.artist?.equals(artist, ignoreCase = true) == true,
+                                    motion = motion,
+                                    rowState = artistRowState,
+                                    onClick = { onNavigateToLibrary() }
+                                )
                             }
                         }
                     }
@@ -366,7 +363,13 @@ fun HomeScreen(
             }
 
             // Carousel: Your Local Mix
-            item {
+            item(key = "local_mix_section") {
+                val localMixRowState = rememberLazyListState()
+                val localMixPhase = rememberCarouselBreathingPhase(
+                    isSectionVisible = isLocalMixVisible,
+                    isAppResumed = isAppResumed,
+                    isBreathingEnabled = motion.cardBreathingActive
+                )
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
                         text = "YOUR LOCAL MIX",
@@ -375,12 +378,18 @@ fun HomeScreen(
                         modifier = Modifier.padding(horizontal = 20.dp)
                     )
                     LazyRow(
+                        state = localMixRowState,
                         contentPadding = PaddingValues(horizontal = 20.dp),
                         horizontalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        items(allTracks.shuffled().take(6)) { track ->
-                            HomeTrackCard(
+                        itemsIndexed(localMixTracks, key = { _, t -> t.id }) { index, track ->
+                            AnimatedQuickPickCard(
                                 track = track,
+                                index = index,
+                                isCurrentlyPlaying = currentlyPlayingTrack?.id == track.id,
+                                motion = motion,
+                                breathingPhaseState = localMixPhase,
+                                rowState = localMixRowState,
                                 onClick = { playbackManager.playTrack(track, allTracks) }
                             )
                         }

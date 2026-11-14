@@ -5,6 +5,12 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.sangeet.data.model.PlayerStyle
+import com.example.sangeet.ui.components.ArtworkAnimationIntensity
+import com.example.sangeet.ui.components.ArtworkAnimationPreferencesSnapshot
+import com.example.sangeet.ui.components.ArtworkAnimationStyle
+import com.example.sangeet.ui.components.SpotlightTransitionDirection
+import com.example.sangeet.ui.components.SpotlightTransitionSpeed
+import com.example.sangeet.ui.components.SpotlightTransitionStyle
 import com.example.ui.theme.AccentColor
 import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.CoroutineScope
@@ -140,6 +146,19 @@ class SettingsRepository(private val context: Context) {
         val KEY_LAST_PLAYBACK_QUEUE_IDS = stringPreferencesKey("last_playback_queue_ids")
         val KEY_LAST_PLAYBACK_POSITION_MS = longPreferencesKey("last_playback_position_ms")
 
+        // Home & Cover Artwork Animations
+        val KEY_ART_ANIM_STYLE = stringPreferencesKey("art_anim_style")
+        val KEY_ART_ANIM_INTENSITY = stringPreferencesKey("art_anim_intensity")
+        val KEY_ART_ANIM_KEN_BURNS = booleanPreferencesKey("art_anim_ken_burns")
+        val KEY_ART_ANIM_PARALLAX = booleanPreferencesKey("art_anim_parallax")
+        val KEY_ART_ANIM_AMBIENT_LIGHT = booleanPreferencesKey("art_anim_ambient_light")
+        val KEY_ART_ANIM_BREATHING = booleanPreferencesKey("art_anim_breathing")
+        val KEY_ART_ANIM_TRACK_TRANSITIONS = booleanPreferencesKey("art_anim_track_transitions")
+        val KEY_ART_ANIM_RESPECT_REDUCED_MOTION = booleanPreferencesKey("art_anim_respect_reduced_motion")
+        val KEY_SPOTLIGHT_TRANSITION_STYLE = stringPreferencesKey("spotlight_transition_style")
+        val KEY_SPOTLIGHT_TRANSITION_SPEED = stringPreferencesKey("spotlight_transition_speed")
+        val KEY_SPOTLIGHT_TRANSITION_DIRECTION = stringPreferencesKey("spotlight_transition_direction")
+
         @Volatile
         private var INSTANCE: SettingsRepository? = null
 
@@ -261,6 +280,40 @@ class SettingsRepository(private val context: Context) {
             artworkSize = artSize,
             lockScreenMode = lockMode,
             privacyMode = privacy
+        )
+    }.distinctUntilChanged()
+
+    // --- Home & Cover Artwork Animation Flows ---
+    val artworkAnimationPreferences: Flow<ArtworkAnimationPreferencesSnapshot> = safePreferences.map { prefs ->
+        val style = prefs[KEY_ART_ANIM_STYLE]?.let {
+            try { ArtworkAnimationStyle.valueOf(it) } catch (_: Exception) { ArtworkAnimationStyle.SMOOTH }
+        } ?: if (prefs[KEY_ARTWORK_ANIMATION] == false) ArtworkAnimationStyle.NONE else ArtworkAnimationStyle.SMOOTH
+        val intensity = prefs[KEY_ART_ANIM_INTENSITY]?.let {
+            try { ArtworkAnimationIntensity.valueOf(it) } catch (_: Exception) { ArtworkAnimationIntensity.MEDIUM }
+        } ?: ArtworkAnimationIntensity.MEDIUM
+
+        val spotlightStyle = prefs[KEY_SPOTLIGHT_TRANSITION_STYLE]?.let {
+            try { SpotlightTransitionStyle.valueOf(it) } catch (_: Exception) { SpotlightTransitionStyle.SLIDE }
+        } ?: SpotlightTransitionStyle.SLIDE
+        val spotlightSpeed = prefs[KEY_SPOTLIGHT_TRANSITION_SPEED]?.let {
+            try { SpotlightTransitionSpeed.valueOf(it) } catch (_: Exception) { SpotlightTransitionSpeed.NORMAL }
+        } ?: SpotlightTransitionSpeed.NORMAL
+        val spotlightDir = prefs[KEY_SPOTLIGHT_TRANSITION_DIRECTION]?.let {
+            try { SpotlightTransitionDirection.valueOf(it) } catch (_: Exception) { SpotlightTransitionDirection.AUTOMATIC }
+        } ?: SpotlightTransitionDirection.AUTOMATIC
+
+        ArtworkAnimationPreferencesSnapshot(
+            style = style,
+            intensity = intensity,
+            enableKenBurns = prefs[KEY_ART_ANIM_KEN_BURNS] ?: true,
+            enableParallax = prefs[KEY_ART_ANIM_PARALLAX] ?: true,
+            enableAmbientLighting = prefs[KEY_ART_ANIM_AMBIENT_LIGHT] ?: true,
+            enableCardBreathing = prefs[KEY_ART_ANIM_BREATHING] ?: true,
+            enableTrackTransitions = prefs[KEY_ART_ANIM_TRACK_TRANSITIONS] ?: true,
+            respectReducedMotion = prefs[KEY_ART_ANIM_RESPECT_REDUCED_MOTION] ?: true,
+            spotlightTransitionStyle = spotlightStyle,
+            spotlightTransitionSpeed = spotlightSpeed,
+            spotlightTransitionDirection = spotlightDir
         )
     }.distinctUntilChanged()
 
@@ -546,6 +599,72 @@ class SettingsRepository(private val context: Context) {
             it.remove(KEY_LAST_PLAYBACK_TRACK_ID)
             it.remove(KEY_LAST_PLAYBACK_QUEUE_IDS)
             it.remove(KEY_LAST_PLAYBACK_POSITION_MS)
+        }
+    }
+
+    // --- Home & Cover Artwork Animation Mutations ---
+
+    suspend fun setArtworkAnimationStyle(style: ArtworkAnimationStyle) {
+        dataStore.edit {
+            it[KEY_ART_ANIM_STYLE] = style.name
+            it[KEY_ARTWORK_ANIMATION] = style != ArtworkAnimationStyle.NONE
+        }
+    }
+
+    suspend fun setArtworkAnimationIntensity(intensity: ArtworkAnimationIntensity) {
+        dataStore.edit { it[KEY_ART_ANIM_INTENSITY] = intensity.name }
+    }
+
+    suspend fun setArtworkKenBurnsEnabled(enabled: Boolean) {
+        dataStore.edit { it[KEY_ART_ANIM_KEN_BURNS] = enabled }
+    }
+
+    suspend fun setArtworkParallaxEnabled(enabled: Boolean) {
+        dataStore.edit { it[KEY_ART_ANIM_PARALLAX] = enabled }
+    }
+
+    suspend fun setArtworkAmbientLightingEnabled(enabled: Boolean) {
+        dataStore.edit { it[KEY_ART_ANIM_AMBIENT_LIGHT] = enabled }
+    }
+
+    suspend fun setArtworkCardBreathingEnabled(enabled: Boolean) {
+        dataStore.edit { it[KEY_ART_ANIM_BREATHING] = enabled }
+    }
+
+    suspend fun setArtworkTrackTransitionsEnabled(enabled: Boolean) {
+        dataStore.edit { it[KEY_ART_ANIM_TRACK_TRANSITIONS] = enabled }
+    }
+
+    suspend fun setArtworkRespectReducedMotion(enabled: Boolean) {
+        dataStore.edit { it[KEY_ART_ANIM_RESPECT_REDUCED_MOTION] = enabled }
+    }
+
+    suspend fun setSpotlightTransitionStyle(style: SpotlightTransitionStyle) {
+        dataStore.edit { it[KEY_SPOTLIGHT_TRANSITION_STYLE] = style.name }
+    }
+
+    suspend fun setSpotlightTransitionSpeed(speed: SpotlightTransitionSpeed) {
+        dataStore.edit { it[KEY_SPOTLIGHT_TRANSITION_SPEED] = speed.name }
+    }
+
+    suspend fun setSpotlightTransitionDirection(direction: SpotlightTransitionDirection) {
+        dataStore.edit { it[KEY_SPOTLIGHT_TRANSITION_DIRECTION] = direction.name }
+    }
+
+    suspend fun resetArtworkAnimationSettingsToDefault() {
+        dataStore.edit {
+            it.remove(KEY_ART_ANIM_STYLE)
+            it.remove(KEY_ART_ANIM_INTENSITY)
+            it.remove(KEY_ART_ANIM_KEN_BURNS)
+            it.remove(KEY_ART_ANIM_PARALLAX)
+            it.remove(KEY_ART_ANIM_AMBIENT_LIGHT)
+            it.remove(KEY_ART_ANIM_BREATHING)
+            it.remove(KEY_ART_ANIM_TRACK_TRANSITIONS)
+            it.remove(KEY_ART_ANIM_RESPECT_REDUCED_MOTION)
+            it.remove(KEY_SPOTLIGHT_TRANSITION_STYLE)
+            it.remove(KEY_SPOTLIGHT_TRANSITION_SPEED)
+            it.remove(KEY_SPOTLIGHT_TRANSITION_DIRECTION)
+            it[KEY_ARTWORK_ANIMATION] = true
         }
     }
 

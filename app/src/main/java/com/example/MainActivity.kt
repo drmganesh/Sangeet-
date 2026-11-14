@@ -42,6 +42,7 @@ import com.example.sangeet.data.repository.MediaRepository
 import com.example.sangeet.data.repository.SettingsRepository
 import com.example.sangeet.playback.PlaybackManager
 import com.example.sangeet.playback.PlaybackService
+import com.example.sangeet.ui.components.ArtworkAnimationPreferencesSnapshot
 import com.example.sangeet.ui.components.MiniPlayer
 import com.example.sangeet.ui.screens.*
 import com.example.sangeet.ui.screens.player.PlayerContainer
@@ -64,6 +65,7 @@ sealed class SubScreen {
     data object SpatialAudio : SubScreen()
     data object HomeNavSettings : SubScreen()
     data object NotificationSettings : SubScreen()
+    data object ArtworkAnimationSettings : SubScreen()
     data class BlacklistWhitelist(val initialTab: Int = 0) : SubScreen()
     data class VideoPlayer(val video: VideoTrack) : SubScreen()
 }
@@ -140,6 +142,9 @@ fun SangeetApp(
     val tabNamesMode by settingsRepository.tabNamesMode.collectAsState(initial = "AUTO")
     val hideNavWhileScrolling by settingsRepository.hideNavWhileScrolling.collectAsState(initial = false)
     val rotateWithDevice by settingsRepository.rotateWithDevice.collectAsState(initial = false)
+    val artworkAnimPrefs by settingsRepository.artworkAnimationPreferences.collectAsState(
+        initial = ArtworkAnimationPreferencesSnapshot()
+    )
 
     var currentTab by remember { mutableStateOf(MainNavTab.HOME) }
     var currentSubScreen by remember { mutableStateOf<SubScreen>(SubScreen.None) }
@@ -265,7 +270,8 @@ fun SangeetApp(
                             progress = progress,
                             onTogglePlayPause = { playbackManager.togglePlayPause() },
                             onNext = { playbackManager.playNext() },
-                            onClick = { isPlayerExpanded = true }
+                            onClick = { isPlayerExpanded = true },
+                            animationPrefs = artworkAnimPrefs
                         )
                     }
 
@@ -423,6 +429,7 @@ fun SangeetApp(
                     onNavigateToSpatial = { currentSubScreen = SubScreen.SpatialAudio },
                     onNavigateToHomeNavSettings = { currentSubScreen = SubScreen.HomeNavSettings },
                     onNavigateToNotificationSettings = { currentSubScreen = SubScreen.NotificationSettings },
+                    onNavigateToArtworkAnimationSettings = { currentSubScreen = SubScreen.ArtworkAnimationSettings },
                     onNavigateToBlacklistWhitelist = { tab -> currentSubScreen = SubScreen.BlacklistWhitelist(tab) }
                 )
             }
@@ -468,6 +475,17 @@ fun SangeetApp(
                 exit = slideOutVertically { it }
             ) {
                 NotificationSettingsScreen(
+                    playbackManager = playbackManager,
+                    onNavigateBack = { currentSubScreen = SubScreen.None }
+                )
+            }
+
+            AnimatedVisibility(
+                visible = currentSubScreen is SubScreen.ArtworkAnimationSettings,
+                enter = slideInVertically { it },
+                exit = slideOutVertically { it }
+            ) {
+                ArtworkAnimationSettingsScreen(
                     playbackManager = playbackManager,
                     onNavigateBack = { currentSubScreen = SubScreen.None }
                 )
