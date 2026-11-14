@@ -57,17 +57,18 @@ fun SpatialAudioScreen(
     fun applyPreset(preset: SpatialPreset) {
         selectedPresetName = preset.name
         isEnabled = preset.isEnabled
-        spatial.isEnabled = preset.isEnabled
+        playbackManager.setSpatialEnabled(preset.isEnabled)
         intensity = preset.spatialIntensity
-        spatial.spatialIntensity = preset.spatialIntensity
+        playbackManager.setSpatialIntensity(preset.spatialIntensity)
         speed = preset.rotationSpeed
-        spatial.rotationSpeed = preset.rotationSpeed
+        playbackManager.setSpatialRotationSpeed(preset.rotationSpeed)
         direction = preset.rotationDirection
-        spatial.rotationDirection = preset.rotationDirection
+        playbackManager.setSpatialRotationDirection(preset.rotationDirection)
         width = preset.soundstageWidth
-        spatial.soundstageWidth = preset.soundstageWidth
+        playbackManager.setSpatialWidth(preset.soundstageWidth)
         depth = preset.soundstageDepth
-        spatial.soundstageDepth = preset.soundstageDepth
+        playbackManager.setSpatialDepth(preset.soundstageDepth)
+        playbackManager.setSpatialPresetName(preset.name)
     }
 
     Scaffold(
@@ -103,7 +104,7 @@ fun SpatialAudioScreen(
                         checked = isEnabled,
                         onCheckedChange = {
                             isEnabled = it
-                            spatial.isEnabled = it
+                            playbackManager.setSpatialEnabled(it)
                         },
                         modifier = Modifier
                             .padding(end = 8.dp)
@@ -188,8 +189,8 @@ fun SpatialAudioScreen(
                         isRotating = speed > 0.05f && direction != 3,
                         onManualPositionChanged = { angleDeg ->
                             direction = 3
-                            spatial.rotationDirection = 3
-                            spatial.manualAzimuthDegrees = angleDeg
+                            playbackManager.setSpatialRotationDirection(3)
+                            playbackManager.setSpatialManualAzimuth(angleDeg)
                             liveAzimuthDegrees = angleDeg
                         },
                         modifier = Modifier
@@ -264,7 +265,7 @@ fun SpatialAudioScreen(
                                 selected = direction == dir,
                                 onClick = {
                                     direction = dir
-                                    spatial.rotationDirection = dir
+                                    playbackManager.setSpatialRotationDirection(dir)
                                 },
                                 label = { Text(label, style = MaterialTheme.typography.labelSmall) },
                                 leadingIcon = { Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp)) },
@@ -286,7 +287,7 @@ fun SpatialAudioScreen(
                             value = speed,
                             onValueChange = {
                                 speed = it
-                                spatial.rotationSpeed = it
+                                playbackManager.setSpatialRotationSpeed(it)
                             },
                             valueRange = 0f..4f,
                             enabled = isEnabled,
@@ -325,7 +326,7 @@ fun SpatialAudioScreen(
                             value = intensity,
                             onValueChange = {
                                 intensity = it
-                                spatial.spatialIntensity = it
+                                playbackManager.setSpatialIntensity(it)
                             },
                             valueRange = 0f..1f,
                             enabled = isEnabled,
@@ -346,7 +347,7 @@ fun SpatialAudioScreen(
                             value = width,
                             onValueChange = {
                                 width = it
-                                spatial.soundstageWidth = it
+                                playbackManager.setSpatialWidth(it)
                             },
                             valueRange = 0.8f..2.2f,
                             enabled = isEnabled,
@@ -367,7 +368,7 @@ fun SpatialAudioScreen(
                             value = depth,
                             onValueChange = {
                                 depth = it
-                                spatial.soundstageDepth = it
+                                playbackManager.setSpatialDepth(it)
                             },
                             valueRange = 0f..1f,
                             enabled = isEnabled,

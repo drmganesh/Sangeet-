@@ -1,32 +1,35 @@
 package com.example.sangeet.ui.screens
 
 import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.sangeet.data.model.AudioTrack
-import com.example.sangeet.data.model.VideoTrack
+import com.example.sangeet.data.model.*
 import com.example.sangeet.data.repository.MediaRepository
+import com.example.sangeet.data.rules.RuleConflict
 import com.example.sangeet.playback.PlaybackManager
+import com.example.sangeet.scanner.FolderInspectionResult
+import com.example.sangeet.ui.components.*
 import kotlinx.coroutines.launch
 
 fun formatBytes(bytes: Long): String {
@@ -39,7 +42,7 @@ fun formatBytes(bytes: Long): String {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun FilesScreen(
     playbackManager: PlaybackManager,
@@ -47,14 +50,37 @@ fun FilesScreen(
     onPlayVideo: (VideoTrack) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    var selectedTab by remember { mutableIntStateOf(0) } // 0: Audio, 1: Videos
+    var selectedTab by remember { mutableIntStateOf(0) } // 0: Audio, 1: Videos, 2: Folders
 
     val allTracks by repository.allTracks.collectAsState(initial = emptyList())
     val allVideos by repository.allVideos.collectAsState(initial = emptyList())
+    val mediaFolders by repository.mediaFolders.collectAsState(initial = emptyList())
+    val blacklistEntries by repository.blacklist.collectAsState(initial = emptyList())
+    val whitelistEntries by repository.whitelist.collectAsState(initial = emptyList())
 
     val totalAudioBytes = remember(allTracks) { allTracks.sumOf { it.fileSize } }
     val totalVideoBytes = remember(allVideos) { allVideos.sumOf { it.fileSize } }
+
+    // Multi-select state
+    var isSelectionMode by remember { mutableStateOf(false) }
+    var selectedAudioIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var selectedVideoIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var selectedFolderKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    // Conflict warning & SAF folder picker states
+    var pendingConflict by remember { mutableStateOf<Pair<QuickRuleProposal, List<RuleConflict>>?>(null) }
+    var pickerListKind by remember { mutableStateOf(RuleListKind.BLACKLIST) }
+    var pendingSafInspection by remember { mutableStateOf<FolderInspectionResult.Success?>(null) }
+    var pendingSafConflicts by remember { mutableStateOf<List<RuleConflict>>(emptyList()) }
+
+    BackHandler(enabled = isSelectionMode) {
+        isSelectionMode = false
+        selectedAudioIds = emptySet()
+        selectedVideoIds = emptySet()
+        selectedFolderKeys = emptySet()
+    }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -66,6 +92,42 @@ fun FilesScreen(
                     playbackManager.playTrack(imported)
                 }
             }
+        }
+    }
+
+    val folderPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            coroutineScope.launch {
+                val res = repository.inspectPickedSafFolder(uri)
+                when (res) {
+                    is FolderInspectionResult.Success -> {
+                        val conflicts = repository.detectConflictsForNewRule(
+                            targetList = pickerListKind,
+                            ruleType = RuleType.FOLDER,
+                            identifier = res.displayPath,
+                            documentId = res.documentId,
+                            treeUri = res.treeUri
+                        )
+                        pendingSafInspection = res
+                        pendingSafConflicts = conflicts
+                    }
+                    is FolderInspectionResult.PermissionRevoked -> Toast.makeText(context, res.message, Toast.LENGTH_LONG).show()
+                    is FolderInspectionResult.FolderUnavailable -> Toast.makeText(context, res.message, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    val proposeRule: (QuickRuleProposal) -> Unit = { proposal ->
+        coroutineScope.launch {
+            executeQuickRuleWithConflictCheck(
+                repository = repository,
+                proposal = proposal,
+                context = context,
+                onConflictsFound = { p, c -> pendingConflict = p to c }
+            )
         }
     }
 
@@ -119,7 +181,7 @@ fun FilesScreen(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "${allTracks.size} Audio Tracks • ${allVideos.size} Videos",
+                            text = "${allTracks.size} Audio Tracks • ${allVideos.size} Videos • ${mediaFolders.size} Folders",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -139,7 +201,7 @@ fun FilesScreen(
             }
         }
 
-        // Sub tabs: Audio / Video
+        // Sub tabs: Audio / Video / Folders
         TabRow(
             selectedTabIndex = selectedTab,
             modifier = Modifier.padding(horizontal = 16.dp),
@@ -147,138 +209,621 @@ fun FilesScreen(
         ) {
             Tab(
                 selected = selectedTab == 0,
-                onClick = { selectedTab = 0 },
-                text = { Text("Music Files (${allTracks.size})") }
+                onClick = {
+                    selectedTab = 0
+                    isSelectionMode = false
+                },
+                text = { Text("Music (${allTracks.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) }
             )
             Tab(
                 selected = selectedTab == 1,
-                onClick = { selectedTab = 1 },
-                text = { Text("Video Files (${allVideos.size})") }
+                onClick = {
+                    selectedTab = 1
+                    isSelectionMode = false
+                },
+                text = { Text("Videos (${allVideos.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            )
+            Tab(
+                selected = selectedTab == 2,
+                onClick = {
+                    selectedTab = 2
+                    isSelectionMode = false
+                },
+                text = { Text("Folders (${mediaFolders.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                modifier = Modifier.testTag("files_tab_folders")
             )
         }
 
+        MultiSelectRuleActionBar(
+            visible = isSelectionMode,
+            selectedCount = when (selectedTab) {
+                0 -> selectedAudioIds.size
+                1 -> selectedVideoIds.size
+                else -> selectedFolderKeys.size
+            },
+            onSelectAll = {
+                when (selectedTab) {
+                    0 -> {
+                        val all = allTracks.map { it.id }.toSet()
+                        selectedAudioIds = if (selectedAudioIds.size == all.size) emptySet() else all
+                    }
+                    1 -> {
+                        val all = allVideos.map { it.id }.toSet()
+                        selectedVideoIds = if (selectedVideoIds.size == all.size) emptySet() else all
+                    }
+                    else -> {
+                        val all = mediaFolders.map { it.canonicalKey }.toSet()
+                        selectedFolderKeys = if (selectedFolderKeys.size == all.size) emptySet() else all
+                    }
+                }
+            },
+            onBlacklistSelected = {
+                coroutineScope.launch {
+                    when (selectedTab) {
+                        0 -> {
+                            val list = allTracks.filter { it.id in selectedAudioIds }
+                            list.forEach { t ->
+                                repository.addToBlacklist("SONG", t.path.ifBlank { t.id.toString() }, t.title, t.folderPath, t.sourceTreeUri, t.documentId, 1)
+                            }
+                            selectedAudioIds = emptySet()
+                            Toast.makeText(context, "Blacklisted ${list.size} audio file(s)", Toast.LENGTH_SHORT).show()
+                        }
+                        1 -> {
+                            val list = allVideos.filter { it.id in selectedVideoIds }
+                            list.forEach { v ->
+                                repository.addToBlacklist("VIDEO", v.path.ifBlank { v.id.toString() }, v.title, v.folderPath, v.sourceTreeUri, v.documentId, 1)
+                            }
+                            selectedVideoIds = emptySet()
+                            Toast.makeText(context, "Blacklisted ${list.size} video file(s)", Toast.LENGTH_SHORT).show()
+                        }
+                        else -> {
+                            val list = mediaFolders.filter { it.canonicalKey in selectedFolderKeys }
+                            list.forEach { f ->
+                                repository.addFolderRule(RuleListKind.BLACKLIST, RuleType.FOLDER, f.treeUri, f.documentId, f.displayName, f.displayPath, true, initialMediaCount = f.audioCount + f.videoCount)
+                            }
+                            selectedFolderKeys = emptySet()
+                            Toast.makeText(context, "Blacklisted ${list.size} folder(s)", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    isSelectionMode = false
+                }
+            },
+            onWhitelistSelected = {
+                coroutineScope.launch {
+                    when (selectedTab) {
+                        0 -> {
+                            val list = allTracks.filter { it.id in selectedAudioIds }
+                            list.forEach { t ->
+                                repository.addToWhitelist("SONG", t.path.ifBlank { t.id.toString() }, t.title, t.folderPath, t.sourceTreeUri, t.documentId, 1)
+                            }
+                            selectedAudioIds = emptySet()
+                            Toast.makeText(context, "Whitelisted ${list.size} audio file(s)", Toast.LENGTH_SHORT).show()
+                        }
+                        1 -> {
+                            val list = allVideos.filter { it.id in selectedVideoIds }
+                            list.forEach { v ->
+                                repository.addToWhitelist("VIDEO", v.path.ifBlank { v.id.toString() }, v.title, v.folderPath, v.sourceTreeUri, v.documentId, 1)
+                            }
+                            selectedVideoIds = emptySet()
+                            Toast.makeText(context, "Whitelisted ${list.size} video file(s)", Toast.LENGTH_SHORT).show()
+                        }
+                        else -> {
+                            val list = mediaFolders.filter { it.canonicalKey in selectedFolderKeys }
+                            list.forEach { f ->
+                                repository.addFolderRule(RuleListKind.WHITELIST, RuleType.FOLDER, f.treeUri, f.documentId, f.displayName, f.displayPath, true, initialMediaCount = f.audioCount + f.videoCount)
+                            }
+                            selectedFolderKeys = emptySet()
+                            Toast.makeText(context, "Whitelisted ${list.size} folder(s)", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    isSelectionMode = false
+                }
+            },
+            onCancel = {
+                isSelectionMode = false
+                selectedAudioIds = emptySet()
+                selectedVideoIds = emptySet()
+                selectedFolderKeys = emptySet()
+            }
+        )
+
         Spacer(Modifier.height(8.dp))
 
-        if (selectedTab == 0) {
-            // Audio files
-            if (allTracks.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("No local music files indexed yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            } else {
-                LazyColumn(
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(bottom = 120.dp)
-                ) {
-                    items(allTracks) { track ->
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .clickable { playbackManager.playTrack(track, allTracks) },
-                            color = MaterialTheme.colorScheme.surfaceVariant
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(14.dp),
-                                verticalAlignment = Alignment.CenterVertically
+        when (selectedTab) {
+            0 -> {
+                if (allTracks.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxSize().padding(32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("No local music files indexed yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else {
+                    LazyColumn(
+                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 120.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(allTracks, key = { it.id }) { track ->
+                            val isSelected = track.id in selectedAudioIds
+                            val identifier = track.path.ifBlank { track.id.toString() }
+                            val blEntry = blacklistEntries.find {
+                                it.type.equals("SONG", true) && (it.identifier.equals(identifier, true) || it.identifier.equals(track.title, true))
+                            }
+                            val wlEntry = whitelistEntries.find {
+                                it.type.equals("SONG", true) && (it.identifier.equals(identifier, true) || it.identifier.equals(track.title, true))
+                            }
+                            var showMenu by remember { mutableStateOf(false) }
+
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .combinedClickable(
+                                        onClick = {
+                                            if (isSelectionMode) {
+                                                selectedAudioIds = if (isSelected) selectedAudioIds - track.id else selectedAudioIds + track.id
+                                            } else {
+                                                playbackManager.playTrack(track, allTracks)
+                                            }
+                                        },
+                                        onLongClick = {
+                                            isSelectionMode = true
+                                            selectedAudioIds = selectedAudioIds + track.id
+                                        }
+                                    ),
+                                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                                else MaterialTheme.colorScheme.surfaceVariant
                             ) {
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = MaterialTheme.colorScheme.primaryContainer
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        text = track.mimeType.substringAfterLast("/").uppercase().take(4),
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
-                                    )
-                                }
-                                Spacer(Modifier.width(12.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = track.title,
-                                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = "${formatBytes(track.fileSize)} • ${track.path.ifBlank { "Local Storage" }}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    if (isSelectionMode) {
+                                        Checkbox(
+                                            checked = isSelected,
+                                            onCheckedChange = {
+                                                selectedAudioIds = if (it) selectedAudioIds + track.id else selectedAudioIds - track.id
+                                            }
+                                        )
+                                    } else {
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = MaterialTheme.colorScheme.primaryContainer
+                                        ) {
+                                            Text(
+                                                text = track.mimeType.substringAfterLast("/").uppercase().take(4),
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                                            )
+                                        }
+                                    }
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = track.title,
+                                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${formatBytes(track.fileSize)} • ${track.path.ifBlank { "Local Storage" }}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Box {
+                                        IconButton(onClick = { showMenu = true }) {
+                                            Icon(Icons.Rounded.MoreVert, contentDescription = "File Options")
+                                        }
+                                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                            DropdownMenuItem(
+                                                text = { Text("Play Next") },
+                                                onClick = {
+                                                    playbackManager.playNextInQueue(track)
+                                                    showMenu = false
+                                                }
+                                            )
+                                            if (blEntry != null) {
+                                                DropdownMenuItem(
+                                                    text = { Text("Remove from Blacklist") },
+                                                    onClick = {
+                                                        coroutineScope.launch { repository.removeFromBlacklist(blEntry.id) }
+                                                        showMenu = false
+                                                    }
+                                                )
+                                            } else {
+                                                DropdownMenuItem(
+                                                    text = { Text("Add to Blacklist") },
+                                                    onClick = {
+                                                        proposeRule(
+                                                            QuickRuleProposal(
+                                                                targetList = RuleListKind.BLACKLIST,
+                                                                ruleType = RuleType.SONG,
+                                                                identifier = identifier,
+                                                                title = track.title,
+                                                                displayPath = track.path.ifBlank { track.folderPath },
+                                                                documentId = track.documentId,
+                                                                treeUri = track.sourceTreeUri,
+                                                                mediaArtist = track.artist,
+                                                                mediaAlbum = track.album
+                                                            )
+                                                        )
+                                                        showMenu = false
+                                                    }
+                                                )
+                                            }
+                                            if (wlEntry != null) {
+                                                DropdownMenuItem(
+                                                    text = { Text("Remove from Whitelist") },
+                                                    onClick = {
+                                                        coroutineScope.launch { repository.removeFromWhitelist(wlEntry.id) }
+                                                        showMenu = false
+                                                    }
+                                                )
+                                            } else {
+                                                DropdownMenuItem(
+                                                    text = { Text("Add to Whitelist") },
+                                                    onClick = {
+                                                        proposeRule(
+                                                            QuickRuleProposal(
+                                                                targetList = RuleListKind.WHITELIST,
+                                                                ruleType = RuleType.SONG,
+                                                                identifier = identifier,
+                                                                title = track.title,
+                                                                displayPath = track.path.ifBlank { track.folderPath },
+                                                                documentId = track.documentId,
+                                                                treeUri = track.sourceTreeUri,
+                                                                mediaArtist = track.artist,
+                                                                mediaAlbum = track.album
+                                                            )
+                                                        )
+                                                        showMenu = false
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        } else {
-            // Video files
-            if (allVideos.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("No local videos found", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.height(12.dp))
-                        Button(onClick = { coroutineScope.launch { repository.scanVideos() } }) {
-                            Text("Scan Device Videos")
+
+            1 -> {
+                if (allVideos.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxSize().padding(32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("No local videos found", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(12.dp))
+                            Button(onClick = { coroutineScope.launch { repository.scanVideos() } }) {
+                                Text("Scan Device Videos")
+                            }
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 120.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(allVideos, key = { it.id }) { video ->
+                            val isSelected = video.id in selectedVideoIds
+                            val identifier = video.path.ifBlank { video.id.toString() }
+                            val blEntry = blacklistEntries.find {
+                                it.type.equals("VIDEO", true) && (it.identifier.equals(identifier, true) || it.identifier.equals(video.title, true))
+                            }
+                            val wlEntry = whitelistEntries.find {
+                                it.type.equals("VIDEO", true) && (it.identifier.equals(identifier, true) || it.identifier.equals(video.title, true))
+                            }
+                            var showMenu by remember { mutableStateOf(false) }
+
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .combinedClickable(
+                                        onClick = {
+                                            if (isSelectionMode) {
+                                                selectedVideoIds = if (isSelected) selectedVideoIds - video.id else selectedVideoIds + video.id
+                                            } else {
+                                                onPlayVideo(video)
+                                            }
+                                        },
+                                        onLongClick = {
+                                            isSelectionMode = true
+                                            selectedVideoIds = selectedVideoIds + video.id
+                                        }
+                                    ),
+                                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                                else MaterialTheme.colorScheme.surfaceVariant
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (isSelectionMode) {
+                                        Checkbox(
+                                            checked = isSelected,
+                                            onCheckedChange = {
+                                                selectedVideoIds = if (it) selectedVideoIds + video.id else selectedVideoIds - video.id
+                                            }
+                                        )
+                                    } else {
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = MaterialTheme.colorScheme.secondaryContainer
+                                        ) {
+                                            Icon(
+                                                Icons.Rounded.PlayCircle,
+                                                contentDescription = "Video",
+                                                tint = MaterialTheme.colorScheme.secondary,
+                                                modifier = Modifier.padding(8.dp).size(24.dp)
+                                            )
+                                        }
+                                    }
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = video.title,
+                                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${video.resolution} • ${formatBytes(video.fileSize)}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Box {
+                                        IconButton(onClick = { showMenu = true }) {
+                                            Icon(Icons.Rounded.MoreVert, contentDescription = "Video Options")
+                                        }
+                                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                            if (blEntry != null) {
+                                                DropdownMenuItem(
+                                                    text = { Text("Remove from Blacklist") },
+                                                    onClick = {
+                                                        coroutineScope.launch { repository.removeFromBlacklist(blEntry.id) }
+                                                        showMenu = false
+                                                    }
+                                                )
+                                            } else {
+                                                DropdownMenuItem(
+                                                    text = { Text("Add to Blacklist") },
+                                                    onClick = {
+                                                        proposeRule(
+                                                            QuickRuleProposal(
+                                                                targetList = RuleListKind.BLACKLIST,
+                                                                ruleType = RuleType.VIDEO,
+                                                                identifier = identifier,
+                                                                title = video.title,
+                                                                displayPath = video.path.ifBlank { video.folderPath },
+                                                                documentId = video.documentId,
+                                                                treeUri = video.sourceTreeUri
+                                                            )
+                                                        )
+                                                        showMenu = false
+                                                    }
+                                                )
+                                            }
+                                            if (wlEntry != null) {
+                                                DropdownMenuItem(
+                                                    text = { Text("Remove from Whitelist") },
+                                                    onClick = {
+                                                        coroutineScope.launch { repository.removeFromWhitelist(wlEntry.id) }
+                                                        showMenu = false
+                                                    }
+                                                )
+                                            } else {
+                                                DropdownMenuItem(
+                                                    text = { Text("Add to Whitelist") },
+                                                    onClick = {
+                                                        proposeRule(
+                                                            QuickRuleProposal(
+                                                                targetList = RuleListKind.WHITELIST,
+                                                                ruleType = RuleType.VIDEO,
+                                                                identifier = identifier,
+                                                                title = video.title,
+                                                                displayPath = video.path.ifBlank { video.folderPath },
+                                                                documentId = video.documentId,
+                                                                treeUri = video.sourceTreeUri
+                                                            )
+                                                        )
+                                                        showMenu = false
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
-            } else {
+            }
+
+            else -> {
+                // Folders tab (SAF direct folder picker + discovered folders with contextual actions)
                 LazyColumn(
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(bottom = 120.dp)
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 120.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(allVideos) { video ->
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilledTonalButton(
+                                onClick = {
+                                    pickerListKind = RuleListKind.BLACKLIST
+                                    folderPickerLauncher.launch(null)
+                                },
+                                colors = ButtonDefaults.filledTonalButtonColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                                ),
+                                modifier = Modifier.weight(1f).testTag("files_add_folder_blacklist")
+                            ) {
+                                Icon(Icons.Rounded.FolderOff, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Add Folder to Blacklist", maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
+                            }
+                            FilledTonalButton(
+                                onClick = {
+                                    pickerListKind = RuleListKind.WHITELIST
+                                    folderPickerLauncher.launch(null)
+                                },
+                                modifier = Modifier.weight(1f).testTag("files_add_folder_whitelist")
+                            ) {
+                                Icon(Icons.Rounded.CreateNewFolder, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Add Folder to Whitelist", maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
+                            }
+                        }
+                    }
+
+                    items(mediaFolders, key = { it.canonicalKey }) { folder ->
+                        val isSelected = folder.canonicalKey in selectedFolderKeys
+                        var showMenu by remember { mutableStateOf(false) }
+
                         Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                            else MaterialTheme.colorScheme.surfaceVariant,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(14.dp))
-                                .clickable { onPlayVideo(video) },
-                            color = MaterialTheme.colorScheme.surfaceVariant
+                                .combinedClickable(
+                                    onClick = {
+                                        if (isSelectionMode) {
+                                            selectedFolderKeys = if (isSelected) selectedFolderKeys - folder.canonicalKey else selectedFolderKeys + folder.canonicalKey
+                                        }
+                                    },
+                                    onLongClick = {
+                                        isSelectionMode = true
+                                        selectedFolderKeys = selectedFolderKeys + folder.canonicalKey
+                                    }
+                                )
                         ) {
                             Row(
-                                modifier = Modifier.padding(14.dp),
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = MaterialTheme.colorScheme.secondaryContainer
-                                ) {
+                                if (isSelectionMode) {
+                                    Checkbox(
+                                        checked = isSelected,
+                                        onCheckedChange = {
+                                            selectedFolderKeys = if (it) selectedFolderKeys + folder.canonicalKey else selectedFolderKeys - folder.canonicalKey
+                                        }
+                                    )
+                                } else {
                                     Icon(
-                                        Icons.Rounded.PlayCircle,
-                                        contentDescription = "Video",
-                                        tint = MaterialTheme.colorScheme.secondary,
-                                        modifier = Modifier.padding(8.dp).size(24.dp)
+                                        imageVector = if (folder.isBlacklisted) Icons.Rounded.FolderOff else Icons.Rounded.Folder,
+                                        contentDescription = null,
+                                        tint = if (folder.isBlacklisted) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(28.dp)
                                     )
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = video.title,
-                                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                                        text = folder.displayName,
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     Text(
-                                        text = "${video.resolution} • ${formatBytes(video.fileSize)}",
+                                        text = folder.displayPath,
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
+                                    Text(
+                                        text = buildString {
+                                            append("${folder.audioCount} audio • ${folder.videoCount} videos")
+                                            if (folder.isBlacklisted) append(" • BLACKLISTED")
+                                            else if (folder.isWhitelisted) append(" • WHITELISTED")
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (folder.isBlacklisted) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                Box {
+                                    IconButton(onClick = { showMenu = true }) {
+                                        Icon(Icons.Rounded.MoreVert, contentDescription = "Folder Options")
+                                    }
+                                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                        if (folder.isBlacklisted) {
+                                            DropdownMenuItem(
+                                                text = { Text("Remove from Blacklist") },
+                                                onClick = {
+                                                    coroutineScope.launch {
+                                                        folder.blacklistRuleId?.let { repository.removeFolderRule(it) }
+                                                        folder.blacklistEntryId?.let { repository.removeFromBlacklist(it) }
+                                                    }
+                                                    showMenu = false
+                                                }
+                                            )
+                                        } else {
+                                            DropdownMenuItem(
+                                                text = { Text("Add to Blacklist") },
+                                                onClick = {
+                                                    proposeRule(
+                                                        QuickRuleProposal(
+                                                            targetList = RuleListKind.BLACKLIST,
+                                                            ruleType = RuleType.FOLDER,
+                                                            identifier = folder.displayPath,
+                                                            title = folder.displayName,
+                                                            displayPath = folder.displayPath,
+                                                            documentId = folder.documentId,
+                                                            treeUri = folder.treeUri,
+                                                            affectedCount = folder.audioCount + folder.videoCount
+                                                        )
+                                                    )
+                                                    showMenu = false
+                                                }
+                                            )
+                                        }
+                                        if (folder.isWhitelisted) {
+                                            DropdownMenuItem(
+                                                text = { Text("Remove from Whitelist") },
+                                                onClick = {
+                                                    coroutineScope.launch {
+                                                        folder.whitelistRuleId?.let { repository.removeFolderRule(it) }
+                                                        folder.whitelistEntryId?.let { repository.removeFromWhitelist(it) }
+                                                    }
+                                                    showMenu = false
+                                                }
+                                            )
+                                        } else {
+                                            DropdownMenuItem(
+                                                text = { Text("Add to Whitelist") },
+                                                onClick = {
+                                                    proposeRule(
+                                                        QuickRuleProposal(
+                                                            targetList = RuleListKind.WHITELIST,
+                                                            ruleType = RuleType.FOLDER,
+                                                            identifier = folder.displayPath,
+                                                            title = folder.displayName,
+                                                            displayPath = folder.displayPath,
+                                                            documentId = folder.documentId,
+                                                            treeUri = folder.treeUri,
+                                                            affectedCount = folder.audioCount + folder.videoCount
+                                                        )
+                                                    )
+                                                    showMenu = false
+                                                }
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -286,5 +831,51 @@ fun FilesScreen(
                 }
             }
         }
+    }
+
+    QuickRuleConflictHost(
+        pendingConflict = pendingConflict,
+        repository = repository,
+        coroutineScope = coroutineScope,
+        context = context,
+        onClear = { pendingConflict = null }
+    )
+
+    if (pendingSafInspection != null) {
+        val insp = pendingSafInspection!!
+        FolderConfirmationDialog(
+            inspection = insp,
+            targetList = pickerListKind,
+            conflicts = pendingSafConflicts,
+            onDismiss = {
+                pendingSafInspection = null
+                pendingSafConflicts = emptyList()
+            },
+            onConfirm = { chosenType, includeSubfolders, removeConflicts ->
+                coroutineScope.launch {
+                    if (removeConflicts) {
+                        for (c in pendingSafConflicts) repository.removeConflictingRule(c)
+                    }
+                    repository.addFolderRule(
+                        listKind = pickerListKind,
+                        ruleType = chosenType,
+                        treeUri = insp.treeUri,
+                        documentId = insp.documentId,
+                        displayName = insp.displayName,
+                        displayPath = insp.displayPath,
+                        includeSubfolders = includeSubfolders,
+                        subfolderCount = insp.subfolderCount,
+                        initialMediaCount = insp.audioCount + insp.videoCount
+                    )
+                    pendingSafInspection = null
+                    pendingSafConflicts = emptyList()
+                    Toast.makeText(
+                        context,
+                        "Added '${insp.displayName}' to ${if (pickerListKind == RuleListKind.BLACKLIST) "Blacklist" else "Whitelist"}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        )
     }
 }

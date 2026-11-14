@@ -14,14 +14,20 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.sangeet.data.model.AudioTrack
+import com.example.sangeet.data.model.RuleListKind
+import com.example.sangeet.data.model.RuleType
 import com.example.sangeet.data.repository.MediaRepository
+import com.example.sangeet.data.rules.RuleConflict
 import com.example.sangeet.playback.PlaybackManager
+import com.example.sangeet.ui.components.QuickRuleConflictHost
+import com.example.sangeet.ui.components.QuickRuleProposal
+import com.example.sangeet.ui.components.executeQuickRuleWithConflictCheck
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -31,10 +37,12 @@ fun SearchScreen(
     repository: MediaRepository,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     var searchQuery by remember { mutableStateOf("") }
     val recentSearches by repository.recentSearches.collectAsState(initial = emptyList())
     val searchResults by repository.searchTracks(searchQuery).collectAsState(initial = emptyList())
+    var pendingConflict by remember { mutableStateOf<Pair<QuickRuleProposal, List<RuleConflict>>?>(null) }
 
     Column(
         modifier = modifier
@@ -128,7 +136,8 @@ fun SearchScreen(
                     contentPadding = PaddingValues(bottom = 120.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(searchResults) { track ->
+                    items(searchResults, key = { it.id }) { track ->
+                        var showMenu by remember { mutableStateOf(false) }
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -137,7 +146,7 @@ fun SearchScreen(
                             color = MaterialTheme.colorScheme.surfaceVariant
                         ) {
                             Row(
-                                modifier = Modifier.padding(12.dp),
+                                modifier = Modifier.padding(start = 12.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
@@ -161,6 +170,68 @@ fun SearchScreen(
                                         overflow = TextOverflow.Ellipsis,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+                                }
+                                Box {
+                                    IconButton(onClick = { showMenu = true }) {
+                                        Icon(Icons.Rounded.MoreVert, contentDescription = "Options")
+                                    }
+                                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                        DropdownMenuItem(
+                                            text = { Text("Play Next") },
+                                            onClick = {
+                                                playbackManager.playNextInQueue(track)
+                                                showMenu = false
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Add to Blacklist") },
+                                            onClick = {
+                                                coroutineScope.launch {
+                                                    executeQuickRuleWithConflictCheck(
+                                                        repository = repository,
+                                                        proposal = QuickRuleProposal(
+                                                            targetList = RuleListKind.BLACKLIST,
+                                                            ruleType = RuleType.SONG,
+                                                            identifier = track.path.ifBlank { track.id.toString() },
+                                                            title = track.title,
+                                                            displayPath = track.path.ifBlank { track.folderPath },
+                                                            documentId = track.documentId,
+                                                            treeUri = track.sourceTreeUri,
+                                                            mediaArtist = track.artist,
+                                                            mediaAlbum = track.album
+                                                        ),
+                                                        context = context,
+                                                        onConflictsFound = { p, c -> pendingConflict = p to c }
+                                                    )
+                                                }
+                                                showMenu = false
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Add to Whitelist") },
+                                            onClick = {
+                                                coroutineScope.launch {
+                                                    executeQuickRuleWithConflictCheck(
+                                                        repository = repository,
+                                                        proposal = QuickRuleProposal(
+                                                            targetList = RuleListKind.WHITELIST,
+                                                            ruleType = RuleType.SONG,
+                                                            identifier = track.path.ifBlank { track.id.toString() },
+                                                            title = track.title,
+                                                            displayPath = track.path.ifBlank { track.folderPath },
+                                                            documentId = track.documentId,
+                                                            treeUri = track.sourceTreeUri,
+                                                            mediaArtist = track.artist,
+                                                            mediaAlbum = track.album
+                                                        ),
+                                                        context = context,
+                                                        onConflictsFound = { p, c -> pendingConflict = p to c }
+                                                    )
+                                                }
+                                                showMenu = false
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -199,4 +270,12 @@ fun SearchScreen(
             }
         }
     }
+
+    QuickRuleConflictHost(
+        pendingConflict = pendingConflict,
+        repository = repository,
+        coroutineScope = coroutineScope,
+        context = context,
+        onClear = { pendingConflict = null }
+    )
 }

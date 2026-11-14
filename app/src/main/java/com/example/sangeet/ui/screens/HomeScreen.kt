@@ -1,11 +1,13 @@
 package com.example.sangeet.ui.screens
 
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -18,6 +20,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -25,7 +28,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.sangeet.data.model.AudioTrack
 import com.example.sangeet.data.repository.MediaRepository
+import com.example.sangeet.data.repository.SettingsRepository
 import com.example.sangeet.playback.PlaybackManager
+import com.example.sangeet.ui.components.TrackArtwork
 import kotlinx.coroutines.launch
 import java.util.Calendar
 
@@ -39,13 +44,20 @@ fun HomeScreen(
     onNavigateToLibrary: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val settingsRepo = remember { SettingsRepository.getInstance(context) }
 
     val allTracks by repository.allTracks.collectAsState(initial = emptyList())
     val recentlyPlayed by repository.recentlyPlayed.collectAsState(initial = emptyList())
     val recentlyAdded by repository.recentlyAdded.collectAsState(initial = emptyList())
     val mostPlayed by repository.mostPlayed.collectAsState(initial = emptyList())
     val favoriteTracks by repository.favoriteTracks.collectAsState(initial = emptyList())
+    val allArtists by repository.allArtists.collectAsState(initial = emptyList())
+    val allAlbums by repository.allAlbums.collectAsState(initial = emptyList())
+
+    val showGreeting by settingsRepo.showGreeting.collectAsState(initial = true)
+    val spotlightHome by settingsRepo.spotlightHome.collectAsState(initial = true)
 
     val greeting = remember {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
@@ -56,14 +68,12 @@ fun HomeScreen(
         }
     }
 
-    var isScanning by remember { mutableStateOf(false) }
-
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
             .testTag("home_screen"),
         contentPadding = PaddingValues(bottom = 120.dp, top = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(24.dp)
+        verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
         // Top Greeting & Brand Bar
         item {
@@ -71,149 +81,47 @@ fun HomeScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text(
-                        text = greeting,
-                        style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.sp),
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                if (showGreeting) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.testTag("home_greeting_badge")
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = Modifier.size(42.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.Rounded.Person,
+                                    contentDescription = "Profile",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = greeting,
+                                style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "SANGEET",
+                                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Black, letterSpacing = 2.sp),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                } else {
                     Text(
                         text = "SANGEET",
                         style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Black, letterSpacing = 2.sp),
                         color = MaterialTheme.colorScheme.onSurface
                     )
-                }
-
-                FilledTonalButton(
-                    onClick = {
-                        isScanning = true
-                        coroutineScope.launch {
-                            repository.scanMusic()
-                            isScanning = false
-                        }
-                    },
-                    modifier = Modifier.testTag("home_scan_btn")
-                ) {
-                    Icon(
-                        imageVector = if (isScanning) Icons.Rounded.HourglassTop else Icons.Rounded.Sync,
-                        contentDescription = "Scan",
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (isScanning) "Scanning..." else "Scan Music")
-                }
-            }
-        }
-
-        // Quick DSP Showcase Banners (15-Band EQ & 360 Spatial Audio)
-        item {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                // 15-Band EQ Card
-                Surface(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(115.dp)
-                        .shadow(8.dp, RoundedCornerShape(20.dp))
-                        .clickable { onNavigateToEqualizer() }
-                        .testTag("home_eq_card"),
-                    shape = RoundedCornerShape(20.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.linearGradient(
-                                    listOf(
-                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.25f),
-                                        Color.Transparent
-                                    )
-                                )
-                            )
-                            .padding(14.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Icon(
-                                Icons.Rounded.GraphicEq,
-                                contentDescription = "EQ",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(26.dp)
-                            )
-                            Column {
-                                Text(
-                                    text = "15-Band EQ",
-                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "Precision DSP & Bass",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // 360 Spatial Audio Card
-                Surface(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(115.dp)
-                        .shadow(8.dp, RoundedCornerShape(20.dp))
-                        .clickable { onNavigateToSpatial() }
-                        .testTag("home_spatial_card"),
-                    shape = RoundedCornerShape(20.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.linearGradient(
-                                    listOf(
-                                        MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f),
-                                        Color.Transparent
-                                    )
-                                )
-                            )
-                            .padding(14.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Icon(
-                                Icons.Rounded.SurroundSound,
-                                contentDescription = "Spatial",
-                                tint = MaterialTheme.colorScheme.secondary,
-                                modifier = Modifier.size(26.dp)
-                            )
-                            Column {
-                                Text(
-                                    text = "360° Spatial",
-                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "Rotating Soundstage",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -277,8 +185,109 @@ fun HomeScreen(
             }
         }
 
-        // Quick Picks (Horizontal Row)
-        if (allTracks.isNotEmpty()) {
+        // -------------------------------------------------------------
+        // SPOTLIGHT HOME LAYOUT (Featured Hero + Rich Discovery Carousels)
+        // -------------------------------------------------------------
+        if (spotlightHome && allTracks.isNotEmpty()) {
+            val featuredTrack = favoriteTracks.firstOrNull() ?: allTracks.first()
+
+            // 1. Featured Music Hero Section
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp)
+                        .clickable { playbackManager.playTrack(featuredTrack, allTracks) }
+                        .testTag("spotlight_hero_card"),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Box(modifier = Modifier.fillMaxWidth().height(220.dp)) {
+                        TrackArtwork(
+                            track = featuredTrack,
+                            shape = RoundedCornerShape(24.dp),
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        // Gradient Overlay
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(
+                                            Color.Transparent,
+                                            Color.Black.copy(alpha = 0.5f),
+                                            Color.Black.copy(alpha = 0.95f)
+                                        )
+                                    )
+                                )
+                        )
+
+                        // Hero Content
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(18.dp),
+                            verticalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.primary
+                            ) {
+                                Text(
+                                    text = "FEATURED SPOTLIGHT",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 1.sp
+                                    ),
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.Bottom
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = featuredTrack.title,
+                                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                                        color = Color.White,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "${featuredTrack.artist} • ${featuredTrack.album}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = Color.White.copy(alpha = 0.8f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+
+                                FilledIconButton(
+                                    onClick = { playbackManager.playTrack(featuredTrack, allTracks) },
+                                    colors = IconButtonDefaults.filledIconButtonColors(
+                                        containerColor = MaterialTheme.colorScheme.primary
+                                    ),
+                                    modifier = Modifier.size(52.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.PlayArrow,
+                                        contentDescription = "Play",
+                                        tint = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Carousel: Quick Picks
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
@@ -300,10 +309,63 @@ fun HomeScreen(
                     }
                 }
             }
-        }
 
-        // Your Mix & Recommendations (Local Engine)
-        if (allTracks.isNotEmpty()) {
+            // Carousel: Spotlight Artists
+            if (allArtists.isNotEmpty()) {
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            text = "SPOTLIGHT ARTISTS",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 20.dp)
+                        )
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 20.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            items(allArtists.take(8)) { artist ->
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    modifier = Modifier
+                                        .width(110.dp)
+                                        .clickable { onNavigateToLibrary() }
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(54.dp)
+                                                .clip(CircleShape)
+                                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                Icons.Rounded.Person,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(28.dp)
+                                            )
+                                        }
+                                        Spacer(Modifier.height(8.dp))
+                                        Text(
+                                            text = artist,
+                                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Carousel: Your Local Mix
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
@@ -325,22 +387,49 @@ fun HomeScreen(
                     }
                 }
             }
+
+            // Recently Added Tracks (Vertical List)
+            if (recentlyAdded.isNotEmpty()) {
+                item {
+                    Text(
+                        text = "RECENTLY ADDED",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 20.dp)
+                    )
+                }
+                items(recentlyAdded.take(5)) { track ->
+                    HomeTrackListItem(
+                        track = track,
+                        onPlay = { playbackManager.playTrack(track, recentlyAdded) },
+                        onToggleFavorite = {
+                            coroutineScope.launch {
+                                repository.setTrackFavorite(track.id, !track.isFavorite)
+                            }
+                        },
+                        modifier = Modifier.padding(horizontal = 20.dp)
+                    )
+                }
+            }
         }
 
-        // Recently Added Tracks (Vertical List)
-        if (recentlyAdded.isNotEmpty()) {
+        // -------------------------------------------------------------
+        // CLASSIC HOME LAYOUT (Compact Traditional Clean Lists)
+        // -------------------------------------------------------------
+        if (!spotlightHome && allTracks.isNotEmpty()) {
+            // Compact Quick Picks
             item {
                 Text(
-                    text = "RECENTLY ADDED",
+                    text = "ALL TRACKS",
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(horizontal = 20.dp)
                 )
             }
-            items(recentlyAdded.take(5)) { track ->
+            items(allTracks.take(12)) { track ->
                 HomeTrackListItem(
                     track = track,
-                    onPlay = { playbackManager.playTrack(track, recentlyAdded) },
+                    onPlay = { playbackManager.playTrack(track, allTracks) },
                     onToggleFavorite = {
                         coroutineScope.launch {
                             repository.setTrackFavorite(track.id, !track.isFavorite)
@@ -348,6 +437,29 @@ fun HomeScreen(
                     },
                     modifier = Modifier.padding(horizontal = 20.dp)
                 )
+            }
+
+            if (favoriteTracks.isNotEmpty()) {
+                item {
+                    Text(
+                        text = "FAVORITES",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 20.dp)
+                    )
+                }
+                items(favoriteTracks.take(6)) { track ->
+                    HomeTrackListItem(
+                        track = track,
+                        onPlay = { playbackManager.playTrack(track, favoriteTracks) },
+                        onToggleFavorite = {
+                            coroutineScope.launch {
+                                repository.setTrackFavorite(track.id, !track.isFavorite)
+                            }
+                        },
+                        modifier = Modifier.padding(horizontal = 20.dp)
+                    )
+                }
             }
         }
     }
@@ -367,27 +479,11 @@ fun HomeTrackCard(
         color = Color.Transparent
     ) {
         Column {
-            Box(
-                modifier = Modifier
-                    .size(140.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(
-                        Brush.linearGradient(
-                            listOf(
-                                MaterialTheme.colorScheme.primaryContainer,
-                                MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        )
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.MusicNote,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(40.dp)
-                )
-            }
+            TrackArtwork(
+                track = track,
+                modifier = Modifier.size(130.dp),
+                shape = RoundedCornerShape(18.dp)
+            )
             Spacer(Modifier.height(8.dp))
             Text(
                 text = track.title,
@@ -427,20 +523,11 @@ fun HomeTrackListItem(
                 .padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Rounded.MusicNote,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
+            TrackArtwork(
+                track = track,
+                modifier = Modifier.size(48.dp),
+                shape = RoundedCornerShape(12.dp)
+            )
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(

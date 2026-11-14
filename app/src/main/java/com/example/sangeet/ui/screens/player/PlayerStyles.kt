@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.sangeet.data.model.AudioTrack
+import com.example.sangeet.ui.components.TrackArtwork
 import com.example.sangeet.ui.components.WaveformVisualizer
 import kotlin.math.*
 
@@ -111,28 +112,11 @@ fun ClassicPlayer(
                 }
 
                 // Center Label
-                Box(
-                    modifier = Modifier
-                        .size(100.dp)
-                        .clip(CircleShape)
-                        .background(
-                            Brush.sweepGradient(
-                                listOf(
-                                    MaterialTheme.colorScheme.primary,
-                                    MaterialTheme.colorScheme.secondary,
-                                    MaterialTheme.colorScheme.primary
-                                )
-                            )
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Album,
-                        contentDescription = "Vinyl",
-                        tint = Color.Black,
-                        modifier = Modifier.size(48.dp)
-                    )
-                }
+                TrackArtwork(
+                    track = track,
+                    modifier = Modifier.size(100.dp),
+                    shape = CircleShape
+                )
 
                 // Center spindle hole
                 Box(
@@ -318,27 +302,13 @@ fun GesturePlayer(
             verticalArrangement = Arrangement.Center
         ) {
             // Elegant glowing centerpiece
-            Box(
+            TrackArtwork(
+                track = track,
                 modifier = Modifier
                     .size(240.dp)
-                    .clip(RoundedCornerShape(32.dp))
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.25f),
-                                MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        )
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = if (isPlaying) Icons.Rounded.GraphicEq else Icons.Rounded.PlayArrow,
-                    contentDescription = "State",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(72.dp)
-                )
-            }
+                    .shadow(16.dp, RoundedCornerShape(32.dp)),
+                shape = RoundedCornerShape(32.dp)
+            )
 
             Spacer(modifier = Modifier.height(32.dp))
 
@@ -696,20 +666,11 @@ fun BentoPlayer(
                     .padding(20.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(100.dp)
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(MaterialTheme.colorScheme.primaryContainer),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.MusicNote,
-                        contentDescription = "Cover",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(48.dp)
-                    )
-                }
+                TrackArtwork(
+                    track = track,
+                    modifier = Modifier.size(100.dp),
+                    shape = RoundedCornerShape(20.dp)
+                )
                 Spacer(modifier = Modifier.width(16.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(

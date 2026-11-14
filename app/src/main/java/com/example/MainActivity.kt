@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -10,19 +11,34 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.sangeet.data.model.AudioTrack
 import com.example.sangeet.data.model.VideoTrack
 import com.example.sangeet.data.repository.MediaRepository
+import com.example.sangeet.data.repository.SettingsRepository
 import com.example.sangeet.playback.PlaybackManager
 import com.example.sangeet.ui.components.MiniPlayer
 import com.example.sangeet.ui.screens.*
@@ -44,6 +60,8 @@ sealed class SubScreen {
     data object None : SubScreen()
     data object Equalizer : SubScreen()
     data object SpatialAudio : SubScreen()
+    data object HomeNavSettings : SubScreen()
+    data class BlacklistWhitelist(val initialTab: Int = 0) : SubScreen()
     data class VideoPlayer(val video: VideoTrack) : SubScreen()
 }
 
@@ -58,19 +76,26 @@ class MainActivity : ComponentActivity() {
 
         playbackManager = PlaybackManager.getInstance(applicationContext)
         mediaRepository = MediaRepository(applicationContext)
+        val settingsRepository = SettingsRepository.getInstance(applicationContext)
 
         setContent {
-            var themeMode by remember { mutableStateOf(ThemeMode.AMOLED) }
-            var accentColor by remember { mutableStateOf(AccentColor.CYAN) }
+            val themeMode by settingsRepository.themeMode.collectAsState(initial = ThemeMode.AMOLED)
+            val accentColor by settingsRepository.accentColor.collectAsState(initial = AccentColor.CYAN)
+            val scope = rememberCoroutineScope()
 
             SangeetTheme(themeMode = themeMode, accentColor = accentColor) {
                 SangeetApp(
                     playbackManager = playbackManager,
                     repository = mediaRepository,
+                    settingsRepository = settingsRepository,
                     themeMode = themeMode,
-                    onThemeModeChanged = { themeMode = it },
+                    onThemeModeChanged = { newMode ->
+                        scope.launch { settingsRepository.setThemeMode(newMode) }
+                    },
                     accentColor = accentColor,
-                    onAccentColorChanged = { accentColor = it }
+                    onAccentColorChanged = { newAccent ->
+                        scope.launch { settingsRepository.setAccentColor(newAccent) }
+                    }
                 )
             }
         }
@@ -81,21 +106,81 @@ class MainActivity : ComponentActivity() {
 fun SangeetApp(
     playbackManager: PlaybackManager,
     repository: MediaRepository,
+    settingsRepository: SettingsRepository,
     themeMode: ThemeMode,
     onThemeModeChanged: (ThemeMode) -> Unit,
     accentColor: AccentColor,
     onAccentColorChanged: (AccentColor) -> Unit
 ) {
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+
+    // Persistent Home & Navigation settings
+    val startScreenPref by settingsRepository.startScreen.collectAsState(initial = "HOME")
+    val lastVisitedPref by settingsRepository.lastVisitedScreen.collectAsState(initial = "HOME")
+    val nonExpressiveNavBar by settingsRepository.nonExpressiveNavBar.collectAsState(initial = false)
+    val tabNamesMode by settingsRepository.tabNamesMode.collectAsState(initial = "AUTO")
+    val hideNavWhileScrolling by settingsRepository.hideNavWhileScrolling.collectAsState(initial = false)
+    val rotateWithDevice by settingsRepository.rotateWithDevice.collectAsState(initial = false)
 
     var currentTab by remember { mutableStateOf(MainNavTab.HOME) }
     var currentSubScreen by remember { mutableStateOf<SubScreen>(SubScreen.None) }
     var isPlayerExpanded by remember { mutableStateOf(false) }
 
+    // Start Screen Restoration on launch
+    var hasAppliedStartScreen by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(startScreenPref, lastVisitedPref) {
+        if (!hasAppliedStartScreen) {
+            val initialTab = when (startScreenPref) {
+                "LAST" -> {
+                    try {
+                        MainNavTab.valueOf(lastVisitedPref)
+                    } catch (_: Exception) {
+                        MainNavTab.HOME
+                    }
+                }
+                "SEARCH" -> MainNavTab.SEARCH
+                "LIBRARY" -> MainNavTab.LIBRARY
+                else -> MainNavTab.HOME
+            }
+            currentTab = initialTab
+            hasAppliedStartScreen = true
+        }
+    }
+
+    // Dynamic Device Rotation
+    LaunchedEffect(rotateWithDevice) {
+        val activity = context as? ComponentActivity
+        activity?.requestedOrientation = if (rotateWithDevice) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+    }
+
     val currentTrack by playbackManager.currentTrack.collectAsState()
     val isPlaying by playbackManager.isPlaying.collectAsState()
     val positionMs by playbackManager.currentPositionMs.collectAsState()
     val durationMs by playbackManager.durationMs.collectAsState()
+
+    // Hide while scrolling nested scroll listener
+    var isNavVisible by remember { mutableStateOf(true) }
+    val nestedScrollConnection = remember(hideNavWhileScrolling) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (hideNavWhileScrolling) {
+                    if (available.y < -12f) {
+                        isNavVisible = false
+                    } else if (available.y > 12f) {
+                        isNavVisible = true
+                    }
+                } else {
+                    isNavVisible = true
+                }
+                return Offset.Zero
+            }
+        }
+    }
 
     // Request Storage and Notification Permissions
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -140,7 +225,9 @@ fun SangeetApp(
     }
 
     Scaffold(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .nestedScroll(nestedScrollConnection),
         bottomBar = {
             if (!isPlayerExpanded && currentSubScreen == SubScreen.None) {
                 Column {
@@ -157,21 +244,116 @@ fun SangeetApp(
                         )
                     }
 
-                    // Bottom Navigation Bar
-                    NavigationBar(
-                        windowInsets = WindowInsets.navigationBars,
-                        containerColor = MaterialTheme.colorScheme.surface
+                    // Bottom Navigation Bar (Animated for hide on scroll)
+                    AnimatedVisibility(
+                        visible = isNavVisible,
+                        enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                        exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
                     ) {
-                        MainNavTab.entries.forEach { tab ->
-                            NavigationBarItem(
-                                selected = currentTab == tab,
-                                onClick = { currentTab = tab },
-                                icon = {
-                                    Icon(imageVector = tab.icon, contentDescription = tab.title)
-                                },
-                                label = { Text(tab.title) },
-                                modifier = Modifier.testTag("nav_tab_${tab.name.lowercase()}")
-                            )
+                        if (nonExpressiveNavBar) {
+                            // Standard M3 Docked Navigation Bar
+                            NavigationBar(
+                                windowInsets = WindowInsets.navigationBars,
+                                containerColor = MaterialTheme.colorScheme.surface
+                            ) {
+                                MainNavTab.entries.forEach { tab ->
+                                    val selected = currentTab == tab
+                                    val showLabel = when (tabNamesMode) {
+                                        "ALWAYS" -> true
+                                        "OPEN_ONLY" -> selected
+                                        "NEVER" -> false
+                                        else -> false // AUTO (standard M3 responsive)
+                                    }
+
+                                    NavigationBarItem(
+                                        selected = selected,
+                                        onClick = {
+                                            currentTab = tab
+                                            coroutineScope.launch {
+                                                settingsRepository.setLastVisitedScreen(tab.name)
+                                            }
+                                        },
+                                        icon = {
+                                            Icon(imageVector = tab.icon, contentDescription = tab.title)
+                                        },
+                                        label = if (showLabel || tabNamesMode == "AUTO") {
+                                            { Text(tab.title) }
+                                        } else null,
+                                        alwaysShowLabel = tabNamesMode == "ALWAYS",
+                                        modifier = Modifier.testTag("nav_tab_${tab.name.lowercase()}")
+                                    )
+                                }
+                            }
+                        } else {
+                            // Expressive Floating Pill Navigation Bar
+                            Surface(
+                                shape = RoundedCornerShape(26.dp),
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                                tonalElevation = 8.dp,
+                                shadowElevation = 10.dp,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                                    .windowInsetsPadding(WindowInsets.navigationBars)
+                                    .clip(RoundedCornerShape(26.dp))
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp, horizontal = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceAround,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    MainNavTab.entries.forEach { tab ->
+                                        val selected = currentTab == tab
+                                        val showLabel = when (tabNamesMode) {
+                                            "ALWAYS" -> true
+                                            "OPEN_ONLY" -> selected
+                                            "NEVER" -> false
+                                            else -> true // AUTO
+                                        }
+
+                                        Surface(
+                                            shape = RoundedCornerShape(18.dp),
+                                            color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clip(RoundedCornerShape(18.dp))
+                                                .clickable {
+                                                    currentTab = tab
+                                                    coroutineScope.launch {
+                                                        settingsRepository.setLastVisitedScreen(tab.name)
+                                                    }
+                                                }
+                                                .padding(vertical = 6.dp)
+                                                .testTag("nav_tab_${tab.name.lowercase()}")
+                                        ) {
+                                            Column(
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                verticalArrangement = Arrangement.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = tab.icon,
+                                                    contentDescription = tab.title,
+                                                    tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.size(24.dp)
+                                                )
+                                                if (showLabel) {
+                                                    Text(
+                                                        text = tab.title,
+                                                        style = MaterialTheme.typography.labelSmall.copy(
+                                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                                            fontSize = 11.sp
+                                                        ),
+                                                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        maxLines = 1
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -213,11 +395,13 @@ fun SangeetApp(
                     currentAccentColor = accentColor,
                     onAccentColorChanged = onAccentColorChanged,
                     onNavigateToEqualizer = { currentSubScreen = SubScreen.Equalizer },
-                    onNavigateToSpatial = { currentSubScreen = SubScreen.SpatialAudio }
+                    onNavigateToSpatial = { currentSubScreen = SubScreen.SpatialAudio },
+                    onNavigateToHomeNavSettings = { currentSubScreen = SubScreen.HomeNavSettings },
+                    onNavigateToBlacklistWhitelist = { tab -> currentSubScreen = SubScreen.BlacklistWhitelist(tab) }
                 )
             }
 
-            // Sub-screen Overlays (Equalizer, Spatial Audio, Video Player)
+            // Sub-screen Overlays (Equalizer, Spatial Audio, Home & Nav Settings, Video Player)
             AnimatedVisibility(
                 visible = currentSubScreen is SubScreen.Equalizer,
                 enter = slideInVertically { it },
@@ -238,6 +422,29 @@ fun SangeetApp(
                 SpatialAudioScreen(
                     playbackManager = playbackManager,
                     repository = repository,
+                    onNavigateBack = { currentSubScreen = SubScreen.None }
+                )
+            }
+
+            AnimatedVisibility(
+                visible = currentSubScreen is SubScreen.HomeNavSettings,
+                enter = slideInVertically { it },
+                exit = slideOutVertically { it }
+            ) {
+                HomeNavSettingsScreen(
+                    onNavigateBack = { currentSubScreen = SubScreen.None }
+                )
+            }
+
+            AnimatedVisibility(
+                visible = currentSubScreen is SubScreen.BlacklistWhitelist,
+                enter = slideInVertically { it },
+                exit = slideOutVertically { it }
+            ) {
+                val blTab = (currentSubScreen as? SubScreen.BlacklistWhitelist)?.initialTab ?: 0
+                BlacklistWhitelistScreen(
+                    repository = repository,
+                    initialTab = blTab,
                     onNavigateBack = { currentSubScreen = SubScreen.None }
                 )
             }

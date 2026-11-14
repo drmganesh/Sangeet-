@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.sangeet.data.model.*
 import kotlinx.coroutines.CoroutineScope
@@ -19,21 +20,149 @@ import kotlinx.coroutines.launch
         PlaybackHistory::class,
         SearchHistory::class,
         EqualizerPreset::class,
-        SpatialPreset::class
+        SpatialPreset::class,
+        BlacklistEntry::class,
+        WhitelistEntry::class,
+        FolderRule::class,
+        FolderPermission::class,
+        AlbumArtworkEntry::class,
+        LyricsMetadataEntry::class
     ],
-    version = 1,
+    version = 3,
     exportSchema = false
 )
+@androidx.room.TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun audioTrackDao(): AudioTrackDao
     abstract fun videoTrackDao(): VideoTrackDao
     abstract fun playlistDao(): PlaylistDao
     abstract fun historyAndStatsDao(): HistoryAndStatsDao
     abstract fun presetDao(): PresetDao
+    abstract fun blacklistDao(): BlacklistDao
+    abstract fun whitelistDao(): WhitelistDao
+    abstract fun folderRuleDao(): FolderRuleDao
+    abstract fun folderPermissionDao(): FolderPermissionDao
+    abstract fun artworkDao(): ArtworkDao
+    abstract fun lyricsDao(): LyricsDao
 
     companion object {
         @Volatile
         private var INSTANCE: AppDatabase? = null
+
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE audio_tracks ADD COLUMN artworkUri TEXT NOT NULL DEFAULT ''")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `blacklist_entries` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `type` TEXT NOT NULL,
+                        `identifier` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `addedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `whitelist_entries` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `type` TEXT NOT NULL,
+                        `identifier` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `addedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `album_artwork_entries` (
+                        `albumKey` TEXT PRIMARY KEY NOT NULL,
+                        `artworkPath` TEXT NOT NULL,
+                        `isCustom` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `lyrics_metadata_entries` (
+                        `trackId` INTEGER PRIMARY KEY NOT NULL,
+                        `lyricsPath` TEXT NOT NULL,
+                        `customOffsetMs` INTEGER NOT NULL,
+                        `isManual` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Preserve all existing audio and video tracks while adding SAF metadata columns
+                db.execSQL("ALTER TABLE audio_tracks ADD COLUMN sourceTreeUri TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE audio_tracks ADD COLUMN documentId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE audio_tracks ADD COLUMN folderPath TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE audio_tracks ADD COLUMN isWhitelistOnly INTEGER NOT NULL DEFAULT 0")
+
+                db.execSQL("ALTER TABLE video_tracks ADD COLUMN sourceTreeUri TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE video_tracks ADD COLUMN documentId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE video_tracks ADD COLUMN folderPath TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE video_tracks ADD COLUMN isWhitelistOnly INTEGER NOT NULL DEFAULT 0")
+
+                // Preserve existing blacklist & whitelist entries while adding folder/status metadata
+                db.execSQL("ALTER TABLE blacklist_entries ADD COLUMN displayPath TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE blacklist_entries ADD COLUMN treeUri TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE blacklist_entries ADD COLUMN documentId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE blacklist_entries ADD COLUMN affectedCount INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE blacklist_entries ADD COLUMN status TEXT NOT NULL DEFAULT 'ACTIVE'")
+
+                db.execSQL("ALTER TABLE whitelist_entries ADD COLUMN displayPath TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE whitelist_entries ADD COLUMN treeUri TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE whitelist_entries ADD COLUMN documentId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE whitelist_entries ADD COLUMN affectedCount INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE whitelist_entries ADD COLUMN status TEXT NOT NULL DEFAULT 'ACTIVE'")
+
+                // Create FolderRule & FolderPermission tables
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `folder_rules` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `listKind` TEXT NOT NULL,
+                        `ruleType` TEXT NOT NULL,
+                        `treeUri` TEXT NOT NULL,
+                        `documentId` TEXT NOT NULL,
+                        `displayName` TEXT NOT NULL,
+                        `displayPath` TEXT NOT NULL,
+                        `includeSubfolders` INTEGER NOT NULL,
+                        `affectedMediaCount` INTEGER NOT NULL,
+                        `subfolderCount` INTEGER NOT NULL,
+                        `creationDate` INTEGER NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `lastScannedAt` INTEGER NOT NULL,
+                        `lastError` TEXT NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `folder_permissions` (
+                        `treeUri` TEXT PRIMARY KEY NOT NULL,
+                        `documentId` TEXT NOT NULL,
+                        `displayName` TEXT NOT NULL,
+                        `hasReadPermission` INTEGER NOT NULL,
+                        `hasWritePermission` INTEGER NOT NULL,
+                        `isPersisted` INTEGER NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `grantedAt` INTEGER NOT NULL,
+                        `lastVerifiedAt` INTEGER NOT NULL,
+                        `errorMessage` TEXT NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
 
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
@@ -42,6 +171,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "sangeet_database.db"
                 )
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .addCallback(object : Callback() {
                         override fun onCreate(db: SupportSQLiteDatabase) {
                             super.onCreate(db)
@@ -50,7 +180,6 @@ abstract class AppDatabase : RoomDatabase() {
                             }
                         }
                     })
-                    .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance
                 instance

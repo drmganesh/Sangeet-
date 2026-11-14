@@ -71,15 +71,16 @@ fun EqualizerScreen(
                 newGains[i] = jsonArray.getDouble(i).toFloat()
             }
             bandGains = newGains
-            eq.setAllBands(newGains)
+            playbackManager.setEqAllBands(newGains)
             bassBoost = preset.bassBoost
-            eq.bassBoostDb = preset.bassBoost
+            playbackManager.setEqBassBoost(preset.bassBoost)
             trebleBoost = preset.trebleBoost
-            eq.trebleBoostDb = preset.trebleBoost
+            playbackManager.setEqTrebleBoost(preset.trebleBoost)
             balance = preset.balance
-            eq.balance = preset.balance
+            playbackManager.setEqBalance(preset.balance)
             preamp = preset.preampGainDb
-            eq.preampGainDb = preset.preampGainDb
+            playbackManager.setEqPreamp(preset.preampGainDb)
+            playbackManager.setEqPresetName(preset.name)
         } catch (_: Exception) {}
     }
 
@@ -115,13 +116,19 @@ fun EqualizerScreen(
                     // Reset Button
                     IconButton(
                         onClick = {
-                            eq.resetToFlat()
-                            bandGains = eq.getAllBandGains()
+                            val flatGains = FloatArray(15) { 0f }
+                            bandGains = flatGains
+                            playbackManager.setEqAllBands(flatGains)
                             bassBoost = 0f
+                            playbackManager.setEqBassBoost(0f)
                             trebleBoost = 0f
+                            playbackManager.setEqTrebleBoost(0f)
                             preamp = 0f
+                            playbackManager.setEqPreamp(0f)
                             balance = 0f
+                            playbackManager.setEqBalance(0f)
                             selectedPresetName = "Flat"
+                            playbackManager.setEqPresetName("Flat")
                         },
                         modifier = Modifier.testTag("eq_reset_btn")
                     ) {
@@ -132,7 +139,7 @@ fun EqualizerScreen(
                         checked = isEnabled,
                         onCheckedChange = {
                             isEnabled = it
-                            eq.isEnabled = it
+                            playbackManager.setEqEnabled(it)
                         },
                         modifier = Modifier
                             .padding(end = 8.dp)
@@ -249,7 +256,7 @@ fun EqualizerScreen(
                                             val updated = bandGains.clone()
                                             updated[i] = newGain
                                             bandGains = updated
-                                            eq.setBandGain(i, newGain)
+                                            playbackManager.setEqBandGain(i, newGain)
                                             selectedPresetName = "Custom"
                                         },
                                         valueRange = -12f..12f,
@@ -303,7 +310,7 @@ fun EqualizerScreen(
                             value = bassBoost,
                             onValueChange = {
                                 bassBoost = it
-                                eq.bassBoostDb = it
+                                playbackManager.setEqBassBoost(it)
                             },
                             valueRange = 0f..12f,
                             enabled = isEnabled,
@@ -324,7 +331,7 @@ fun EqualizerScreen(
                             value = trebleBoost,
                             onValueChange = {
                                 trebleBoost = it
-                                eq.trebleBoostDb = it
+                                playbackManager.setEqTrebleBoost(it)
                             },
                             valueRange = 0f..12f,
                             enabled = isEnabled,
@@ -345,7 +352,7 @@ fun EqualizerScreen(
                             value = preamp,
                             onValueChange = {
                                 preamp = it
-                                eq.preampGainDb = it
+                                playbackManager.setEqPreamp(it)
                             },
                             valueRange = -12f..12f,
                             enabled = isEnabled,
@@ -371,7 +378,7 @@ fun EqualizerScreen(
                             value = balance,
                             onValueChange = {
                                 balance = it
-                                eq.balance = it
+                                playbackManager.setEqBalance(it)
                             },
                             valueRange = -1f..1f,
                             enabled = isEnabled,

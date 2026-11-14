@@ -14,21 +14,20 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import com.example.sangeet.data.local.AppDatabase
-import com.example.sangeet.data.model.AudioTrack
-import com.example.sangeet.data.model.PlaybackHistory
-import com.example.sangeet.data.model.PlayerStyle
+import com.example.sangeet.data.model.*
+import com.example.sangeet.data.repository.SettingsRepository
+import com.example.sangeet.data.rules.RuleFilterEngine
 import com.example.sangeet.dsp.EqualizerAudioProcessor
 import com.example.sangeet.dsp.SpatialAudioProcessor
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.*
 import java.util.Collections
 
 class PlaybackManager private constructor(private val context: Context) {
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val db = AppDatabase.getInstance(context)
+    val settingsRepository = SettingsRepository.getInstance(context)
 
     val equalizerProcessor = EqualizerAudioProcessor()
     val spatialProcessor = SpatialAudioProcessor()
@@ -70,6 +69,10 @@ class PlaybackManager private constructor(private val context: Context) {
     private var progressUpdateJob: Job? = null
     private var nativeEqualizer: Equalizer? = null
 
+    @Volatile private var cachedBlacklist: List<BlacklistEntry> = emptyList()
+    @Volatile private var cachedWhitelist: List<WhitelistEntry> = emptyList()
+    @Volatile private var cachedFolderRules: List<FolderRule> = emptyList()
+
     init {
         val audioSink: AudioSink = DefaultAudioSink.Builder(context)
             .setAudioProcessors(arrayOf<AudioProcessor>(equalizerProcessor, spatialProcessor))
@@ -99,6 +102,118 @@ class PlaybackManager private constructor(private val context: Context) {
 
         setupPlayerListeners()
         startProgressUpdater()
+        restorePersistedSettings()
+        observeRuleChanges()
+    }
+
+    private fun observeRuleChanges() {
+        applicationScope.launch {
+            combine(
+                db.blacklistDao().getAllBlacklist(),
+                db.whitelistDao().getAllWhitelist(),
+                db.folderRuleDao().getAllFolderRules()
+            ) { bl, wl, fr -> Triple(bl, wl, fr) }
+                .collect { (bl, wl, fr) ->
+                    cachedBlacklist = bl
+                    cachedWhitelist = wl
+                    cachedFolderRules = fr
+                    scrubExcludedFromQueue()
+                }
+        }
+    }
+
+    private fun scrubExcludedFromQueue() {
+        val currentQueue = _queue.value
+        if (currentQueue.isEmpty()) return
+
+        val allowedIds = RuleFilterEngine.filterAudioTracks(
+            currentQueue, cachedBlacklist, cachedWhitelist, cachedFolderRules
+        ).map { it.id }.toSet()
+
+        if (allowedIds.size == currentQueue.size) return
+
+        // Remove disallowed items from back to front so exoPlayer indices stay valid
+        val mutableQueue = currentQueue.toMutableList()
+        var currentWasRemoved = false
+        val currentPlayingId = _currentTrack.value?.id
+
+        for (i in mutableQueue.indices.reversed()) {
+            val t = mutableQueue[i]
+            if (t.id !in allowedIds) {
+                if (t.id == currentPlayingId) {
+                    currentWasRemoved = true
+                }
+                mutableQueue.removeAt(i)
+                if (i < exoPlayer.mediaItemCount) {
+                    exoPlayer.removeMediaItem(i)
+                }
+            }
+        }
+        _queue.value = mutableQueue
+        if (mutableQueue.isEmpty()) {
+            exoPlayer.stop()
+            _currentTrack.value = null
+            _isPlaying.value = false
+        } else if (currentWasRemoved) {
+            val newIdx = exoPlayer.currentMediaItemIndex.coerceIn(0, mutableQueue.lastIndex)
+            _currentTrack.value = mutableQueue.getOrNull(newIdx)
+        }
+    }
+
+    private fun restorePersistedSettings() {
+        applicationScope.launch(Dispatchers.IO) {
+            try {
+                // Restore Player & Playback settings
+                val style = settingsRepository.playerStyle.first()
+                val shuffle = settingsRepository.shuffleEnabled.first()
+                val repeat = settingsRepository.repeatMode.first()
+                val speed = settingsRepository.playbackSpeed.first()
+
+                withContext(Dispatchers.Main) {
+                    _playerStyle.value = style
+                    _isShuffleEnabled.value = shuffle
+                    exoPlayer.shuffleModeEnabled = shuffle
+                    _repeatMode.value = repeat
+                    exoPlayer.repeatMode = repeat
+                    _playbackSpeed.value = speed
+                    exoPlayer.setPlaybackSpeed(speed)
+                }
+
+                // Restore Equalizer settings
+                val eqActive = settingsRepository.eqEnabled.first()
+                val eqBands = settingsRepository.eqBandGains.first()
+                val eqPreampVal = settingsRepository.eqPreamp.first()
+                val eqBass = settingsRepository.eqBassBoost.first()
+                val eqTreble = settingsRepository.eqTrebleBoost.first()
+                val eqBal = settingsRepository.eqBalance.first()
+
+                equalizerProcessor.isEnabled = eqActive
+                equalizerProcessor.setAllBands(eqBands)
+                equalizerProcessor.preampGainDb = eqPreampVal
+                equalizerProcessor.bassBoostDb = eqBass
+                equalizerProcessor.trebleBoostDb = eqTreble
+                equalizerProcessor.balance = eqBal
+
+                // Restore Spatial Audio settings
+                val spActive = settingsRepository.spatialEnabled.first()
+                val spIntensity = settingsRepository.spatialIntensity.first()
+                val spSpeed = settingsRepository.spatialRotationSpeed.first()
+                val spDirection = settingsRepository.spatialRotationDirection.first()
+                val spWidth = settingsRepository.spatialWidth.first()
+                val spDepth = settingsRepository.spatialDepth.first()
+                val spAzimuth = settingsRepository.spatialManualAzimuth.first()
+
+                spatialProcessor.isEnabled = spActive
+                spatialProcessor.spatialIntensity = spIntensity
+                spatialProcessor.rotationSpeed = spSpeed
+                spatialProcessor.rotationDirection = spDirection
+                spatialProcessor.soundstageWidth = spWidth
+                spatialProcessor.soundstageDepth = spDepth
+                spatialProcessor.manualAzimuthDegrees = spAzimuth
+            } catch (e: Exception) {
+                Log.e("PlaybackManager", "Error restoring persisted settings", e)
+            }
+        }
     }
 
     fun getPlayer(): ExoPlayer = exoPlayer
@@ -121,39 +236,21 @@ class PlaybackManager private constructor(private val context: Context) {
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                val mediaId = mediaItem?.mediaId?.toLongOrNull()
-                if (mediaId != null) {
-                    val track = _queue.value.find { it.id == mediaId }
+                if (mediaItem != null) {
+                    val trackId = mediaItem.mediaId.toLongOrNull()
+                    val track = _queue.value.find { it.id == trackId }
+                        ?: _currentTrack.value?.takeIf { it.id == trackId }
+                    _currentTrack.value = track
+                    _durationMs.value = exoPlayer.duration.coerceAtLeast(0L)
+
                     if (track != null) {
-                        _currentTrack.value = track
-                        recordTrackHistory(track)
+                        recordPlayHistory(track)
                     }
+                } else {
+                    _currentTrack.value = null
                 }
             }
-
-            override fun onAudioSessionIdChanged(audioSessionId: Int) {
-                attachNativeEffects(audioSessionId)
-            }
         })
-    }
-
-    private fun attachNativeEffects(audioSessionId: Int) {
-        if (audioSessionId == C.AUDIO_SESSION_ID_UNSET) return
-        try {
-            nativeEqualizer?.release()
-            nativeEqualizer = Equalizer(0, audioSessionId).apply {
-                enabled = true
-            }
-        } catch (e: Exception) {
-            Log.w("PlaybackManager", "Native hardware Equalizer unavailable; custom 15-band DSP active.", e)
-        }
-    }
-
-    private fun startPlaybackService() {
-        try {
-            val intent = Intent(context, PlaybackService::class.java)
-            context.startForegroundService(intent)
-        } catch (_: Exception) {}
     }
 
     private fun startProgressUpdater() {
@@ -162,20 +259,50 @@ class PlaybackManager private constructor(private val context: Context) {
             while (isActive) {
                 if (exoPlayer.isPlaying) {
                     _currentPositionMs.value = exoPlayer.currentPosition.coerceAtLeast(0L)
-                    val dur = exoPlayer.duration
-                    if (dur > 0) _durationMs.value = dur
+                    _durationMs.value = exoPlayer.duration.coerceAtLeast(0L)
                 }
-                delay(300L)
+                delay(250L)
             }
         }
     }
 
-    fun playTrack(track: AudioTrack, newQueue: List<AudioTrack>? = null) {
-        val queueToSet = newQueue ?: if (_queue.value.isEmpty()) listOf(track) else _queue.value
-        _queue.value = queueToSet
-        _currentTrack.value = track
+    private fun recordPlayHistory(track: AudioTrack) {
+        applicationScope.launch(Dispatchers.IO) {
+            db.historyAndStatsDao().insertPlaybackHistory(
+                PlaybackHistory(
+                    trackId = track.id,
+                    title = track.title,
+                    artist = track.artist,
+                    album = track.album,
+                    durationMs = track.durationMs
+                )
+            )
+            db.audioTrackDao().incrementPlayCount(track.id, System.currentTimeMillis())
+        }
+    }
 
-        val mediaItems = queueToSet.map { t ->
+    private fun startPlaybackService() {
+        try {
+            val intent = Intent(context, PlaybackService::class.java)
+            context.startService(intent)
+        } catch (e: Exception) {
+            Log.e("PlaybackManager", "Failed to start PlaybackService", e)
+        }
+    }
+
+    fun playTrack(track: AudioTrack, trackList: List<AudioTrack> = listOf(track)) {
+        val allowedQueue = RuleFilterEngine.filterAudioTracks(
+            trackList, cachedBlacklist, cachedWhitelist, cachedFolderRules
+        )
+        if (allowedQueue.isEmpty()) return
+
+        val selected = allowedQueue.find { it.id == track.id } ?: allowedQueue.first()
+        val index = allowedQueue.indexOfFirst { it.id == selected.id }.coerceAtLeast(0)
+        _queue.value = allowedQueue
+        _currentTrack.value = selected
+
+        exoPlayer.clearMediaItems()
+        val mediaItems = allowedQueue.map { t ->
             val uri = if (t.contentUri.isNotBlank()) Uri.parse(t.contentUri) else Uri.parse(t.path)
             MediaItem.Builder()
                 .setMediaId(t.id.toString())
@@ -190,51 +317,28 @@ class PlaybackManager private constructor(private val context: Context) {
                 .build()
         }
 
-        val startIndex = queueToSet.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
-
-        exoPlayer.setMediaItems(mediaItems, startIndex, 0L)
+        exoPlayer.setMediaItems(mediaItems, index, 0L)
         exoPlayer.prepare()
         exoPlayer.play()
-        _isPlaying.value = true
-
-        recordTrackHistory(track)
-    }
-
-    private fun recordTrackHistory(track: AudioTrack) {
-        applicationScope.launch(Dispatchers.IO) {
-            db.audioTrackDao().incrementPlayCount(track.id)
-            db.historyAndStatsDao().insertPlaybackHistory(
-                PlaybackHistory(
-                    trackId = track.id,
-                    title = track.title,
-                    artist = track.artist,
-                    album = track.album,
-                    durationMs = track.durationMs
-                )
-            )
-        }
     }
 
     fun togglePlayPause() {
         if (exoPlayer.isPlaying) {
             exoPlayer.pause()
-            _isPlaying.value = false
         } else {
-            if (exoPlayer.playbackState == Player.STATE_IDLE && _currentTrack.value != null) {
-                playTrack(_currentTrack.value!!)
-            } else {
-                exoPlayer.play()
-                _isPlaying.value = true
+            if (exoPlayer.playbackState == Player.STATE_ENDED) {
+                exoPlayer.seekTo(0L)
             }
+            exoPlayer.play()
         }
     }
 
     fun seekTo(positionMs: Long) {
-        exoPlayer.seekTo(positionMs.coerceAtLeast(0L))
+        exoPlayer.seekTo(positionMs)
         _currentPositionMs.value = positionMs
     }
 
-    fun playNext() {
+    fun skipToNext() {
         if (exoPlayer.hasNextMediaItem()) {
             exoPlayer.seekToNextMediaItem()
             exoPlayer.play()
@@ -244,7 +348,7 @@ class PlaybackManager private constructor(private val context: Context) {
         }
     }
 
-    fun playPrevious() {
+    fun skipToPrevious() {
         if (exoPlayer.currentPosition > 3000L) {
             exoPlayer.seekTo(0L)
         } else if (exoPlayer.hasPreviousMediaItem()) {
@@ -255,10 +359,16 @@ class PlaybackManager private constructor(private val context: Context) {
         }
     }
 
+    fun playNext() = skipToNext()
+    fun playPrevious() = skipToPrevious()
+
     fun toggleShuffle() {
         val newShuffle = !_isShuffleEnabled.value
         _isShuffleEnabled.value = newShuffle
         exoPlayer.shuffleModeEnabled = newShuffle
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setShuffle(newShuffle)
+        }
     }
 
     fun cycleRepeatMode() {
@@ -269,16 +379,139 @@ class PlaybackManager private constructor(private val context: Context) {
         }
         _repeatMode.value = nextMode
         exoPlayer.repeatMode = nextMode
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setRepeatMode(nextMode)
+        }
     }
 
     fun setPlaybackSpeed(speed: Float) {
         val clamped = speed.coerceIn(0.25f, 3.0f)
         _playbackSpeed.value = clamped
         exoPlayer.setPlaybackSpeed(clamped)
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setPlaybackSpeed(clamped)
+        }
     }
 
     fun setPlayerStyle(style: PlayerStyle) {
         _playerStyle.value = style
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setPlayerStyle(style)
+        }
+    }
+
+    // --- Equalizer Persistence Operations ---
+
+    fun setEqBandGain(bandIndex: Int, gainDb: Float) {
+        equalizerProcessor.setBandGain(bandIndex, gainDb)
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setEqualizerBands(equalizerProcessor.getAllBandGains())
+        }
+    }
+
+    fun setEqAllBands(gains: FloatArray) {
+        equalizerProcessor.setAllBands(gains)
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setEqualizerBands(equalizerProcessor.getAllBandGains())
+        }
+    }
+
+    fun setEqPreamp(gainDb: Float) {
+        equalizerProcessor.preampGainDb = gainDb
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setEqualizerPreamp(gainDb)
+        }
+    }
+
+    fun setEqBassBoost(boostDb: Float) {
+        equalizerProcessor.bassBoostDb = boostDb
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setEqualizerBassBoost(boostDb)
+        }
+    }
+
+    fun setEqTrebleBoost(boostDb: Float) {
+        equalizerProcessor.trebleBoostDb = boostDb
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setEqualizerTrebleBoost(boostDb)
+        }
+    }
+
+    fun setEqBalance(balance: Float) {
+        equalizerProcessor.balance = balance
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setEqualizerBalance(balance)
+        }
+    }
+
+    fun setEqEnabled(enabled: Boolean) {
+        equalizerProcessor.isEnabled = enabled
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setEqualizerEnabled(enabled)
+        }
+    }
+
+    fun setEqPresetName(name: String) {
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setEqualizerPresetName(name)
+        }
+    }
+
+    // --- Spatial Audio Persistence Operations ---
+
+    fun setSpatialEnabled(enabled: Boolean) {
+        spatialProcessor.isEnabled = enabled
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setSpatialEnabled(enabled)
+        }
+    }
+
+    fun setSpatialIntensity(intensity: Float) {
+        spatialProcessor.spatialIntensity = intensity
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setSpatialIntensity(intensity)
+        }
+    }
+
+    fun setSpatialRotationSpeed(speed: Float) {
+        spatialProcessor.rotationSpeed = speed
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setSpatialRotationSpeed(speed)
+        }
+    }
+
+    fun setSpatialRotationDirection(direction: Int) {
+        spatialProcessor.rotationDirection = direction
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setSpatialRotationDirection(direction)
+        }
+    }
+
+    fun setSpatialWidth(width: Float) {
+        spatialProcessor.soundstageWidth = width
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setSpatialWidth(width)
+        }
+    }
+
+    fun setSpatialDepth(depth: Float) {
+        spatialProcessor.soundstageDepth = depth
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setSpatialDepth(depth)
+        }
+    }
+
+    fun setSpatialManualAzimuth(azimuth: Float) {
+        spatialProcessor.manualAzimuthDegrees = azimuth
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setSpatialManualAzimuth(azimuth)
+        }
+    }
+
+    fun setSpatialPresetName(name: String) {
+        applicationScope.launch(Dispatchers.IO) {
+            settingsRepository.setSpatialPresetName(name)
+        }
     }
 
     fun setSleepTimer(minutes: Int) {
@@ -328,6 +561,9 @@ class PlaybackManager private constructor(private val context: Context) {
     }
 
     fun addToQueue(track: AudioTrack) {
+        if (RuleFilterEngine.filterAudioTracks(listOf(track), cachedBlacklist, cachedWhitelist, cachedFolderRules).isEmpty()) {
+            return
+        }
         val currentList = _queue.value.toMutableList()
         currentList.add(track)
         _queue.value = currentList
@@ -348,6 +584,9 @@ class PlaybackManager private constructor(private val context: Context) {
     }
 
     fun playNextInQueue(track: AudioTrack) {
+        if (RuleFilterEngine.filterAudioTracks(listOf(track), cachedBlacklist, cachedWhitelist, cachedFolderRules).isEmpty()) {
+            return
+        }
         val currentIdx = exoPlayer.currentMediaItemIndex
         val targetIdx = (currentIdx + 1).coerceAtMost(_queue.value.size)
 

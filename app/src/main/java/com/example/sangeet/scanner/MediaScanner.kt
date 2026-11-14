@@ -11,12 +11,17 @@ import android.provider.OpenableColumns
 import android.util.Log
 import com.example.sangeet.data.local.AppDatabase
 import com.example.sangeet.data.model.AudioTrack
+import com.example.sangeet.data.model.FolderRule
+import com.example.sangeet.data.model.RuleListKind
+import com.example.sangeet.data.model.RuleStatus
+import com.example.sangeet.data.model.RuleType
 import com.example.sangeet.data.model.VideoTrack
+import com.example.sangeet.data.rules.RuleFilterEngine
+import com.example.sangeet.data.rules.StoragePathHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
-import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.*
@@ -24,8 +29,10 @@ import kotlin.math.*
 class MediaScanner(private val context: Context) {
 
     private val db = AppDatabase.getInstance(context)
+    val safScanner = SafFolderScanner(context)
 
     suspend fun scanLocalAudio(): Int = withContext(Dispatchers.IO) {
+        val existingById = db.audioTrackDao().getAllTracksSync().associateBy { it.id }
         val tracks = mutableListOf<AudioTrack>()
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
@@ -82,15 +89,20 @@ class MediaScanner(private val context: Context) {
                         id
                     ).toString()
 
-                    var genre = "Music"
-                    var embeddedLyrics = ""
-                    try {
-                        val retriever = MediaMetadataRetriever()
-                        retriever.setDataSource(context, Uri.parse(contentUri))
-                        val extractedGenre = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE)
-                        if (!extractedGenre.isNullOrBlank()) genre = extractedGenre
-                        retriever.release()
-                    } catch (_: Exception) {}
+                    val prev = existingById[id]
+                    val genre = prev?.genre?.takeIf { it.isNotBlank() && it != "Music" } ?: run {
+                        var g = "Music"
+                        try {
+                            val retriever = MediaMetadataRetriever()
+                            retriever.setDataSource(context, Uri.parse(contentUri))
+                            val extractedGenre = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE)
+                            if (!extractedGenre.isNullOrBlank()) g = extractedGenre
+                            retriever.release()
+                        } catch (_: Exception) {}
+                        g
+                    }
+
+                    val parentFolder = if (path.isNotBlank()) File(path).parent ?: "" else ""
 
                     tracks.add(
                         AudioTrack(
@@ -107,7 +119,16 @@ class MediaScanner(private val context: Context) {
                             year = year,
                             mimeType = mime,
                             fileSize = size,
-                            embeddedLyrics = embeddedLyrics
+                            playCount = prev?.playCount ?: 0,
+                            lastPlayedTimestamp = prev?.lastPlayedTimestamp ?: 0L,
+                            isFavorite = prev?.isFavorite ?: false,
+                            embeddedLyrics = prev?.embeddedLyrics ?: "",
+                            lrcPath = prev?.lrcPath ?: "",
+                            artworkUri = prev?.artworkUri ?: "",
+                            sourceTreeUri = prev?.sourceTreeUri ?: "",
+                            documentId = prev?.documentId ?: "",
+                            folderPath = parentFolder,
+                            isWhitelistOnly = false
                         )
                     )
                 }
@@ -119,10 +140,14 @@ class MediaScanner(private val context: Context) {
         if (tracks.isNotEmpty()) {
             db.audioTrackDao().insertTracks(tracks)
         }
-        tracks.size
+
+        // Also scan all persisted SAF folder rules (whitelisted folders + refresh blacklisted folder statuses)
+        val safAdded = scanAllManagedFolders()
+        tracks.size + safAdded
     }
 
     suspend fun scanLocalVideos(): Int = withContext(Dispatchers.IO) {
+        val existingById = db.videoTrackDao().getAllVideosSync().associateBy { it.id }
         val videos = mutableListOf<VideoTrack>()
         val projection = arrayOf(
             MediaStore.Video.Media._ID,
@@ -169,6 +194,9 @@ class MediaScanner(private val context: Context) {
                         id
                     ).toString()
 
+                    val prev = existingById[id]
+                    val parentFolder = if (path.isNotBlank()) File(path).parent ?: "" else ""
+
                     videos.add(
                         VideoTrack(
                             id = id,
@@ -179,7 +207,15 @@ class MediaScanner(private val context: Context) {
                             dateAdded = dateAdded,
                             resolution = res,
                             mimeType = mime,
-                            fileSize = size
+                            fileSize = size,
+                            watchProgressMs = prev?.watchProgressMs ?: 0L,
+                            lastWatchedTimestamp = prev?.lastWatchedTimestamp ?: 0L,
+                            isFavorite = prev?.isFavorite ?: false,
+                            inWatchLater = prev?.inWatchLater ?: false,
+                            sourceTreeUri = prev?.sourceTreeUri ?: "",
+                            documentId = prev?.documentId ?: "",
+                            folderPath = parentFolder,
+                            isWhitelistOnly = false
                         )
                     )
                 }
@@ -192,6 +228,216 @@ class MediaScanner(private val context: Context) {
             db.videoTrackDao().insertVideos(videos)
         }
         videos.size
+    }
+
+    /**
+     * Scans all persisted SAF FolderRule entries.
+     * - Verifies persisted URI permissions without pretending inaccessible folders are empty.
+     * - For WHITELIST folder rules, discovers new audio/video files (even inside .nomedia or non-MediaStore folders)
+     *   and deduplicates them against existing MediaStore entries.
+     * - For BLACKLIST folder rules, updates live status & affected file count.
+     */
+    suspend fun scanAllManagedFolders(): Int = withContext(Dispatchers.IO) {
+        val rules = db.folderRuleDao().getAllFolderRulesSync()
+        var newlyDiscoveredCount = 0
+        for (rule in rules) {
+            newlyDiscoveredCount += scanSingleFolderRule(rule)
+        }
+        newlyDiscoveredCount
+    }
+
+    suspend fun scanSingleFolderRule(rule: FolderRule): Int = withContext(Dispatchers.IO) {
+        // Non-SAF filesystem quick-folder rules (e.g. added via Library/Files folder list)
+        if (!rule.treeUri.startsWith("content://", ignoreCase = true)) {
+            val existingAudio = db.audioTrackDao().getAllTracksSync()
+            val existingVideos = db.videoTrackDao().getAllVideosSync()
+            val count = RuleFilterEngine.countAffectedMediaForFolderRule(rule, existingAudio, existingVideos)
+            db.folderRuleDao().update(
+                rule.copy(
+                    affectedMediaCount = count,
+                    lastScannedAt = System.currentTimeMillis(),
+                    status = if (rule.status == RuleStatus.DISABLED) RuleStatus.DISABLED else RuleStatus.ACTIVE,
+                    lastError = ""
+                )
+            )
+            return@withContext 0
+        }
+
+        val isWhitelist = rule.listKind == RuleListKind.WHITELIST
+        val result = safScanner.inspectFolder(
+            treeUriString = rule.treeUri,
+            extractDeepMetadata = isWhitelist,
+            isWhitelistSource = isWhitelist
+        )
+
+        when (result) {
+            is FolderInspectionResult.PermissionRevoked -> {
+                db.folderRuleDao().update(
+                    rule.copy(
+                        status = RuleStatus.PERMISSION_REVOKED,
+                        lastError = result.message
+                    )
+                )
+                db.folderPermissionDao().getPermission(rule.treeUri)?.let { perm ->
+                    db.folderPermissionDao().insertOrUpdate(
+                        perm.copy(
+                            hasReadPermission = false,
+                            status = RuleStatus.PERMISSION_REVOKED,
+                            lastVerifiedAt = System.currentTimeMillis(),
+                            errorMessage = result.message
+                        )
+                    )
+                }
+                0
+            }
+
+            is FolderInspectionResult.FolderUnavailable -> {
+                db.folderRuleDao().update(
+                    rule.copy(
+                        status = RuleStatus.FOLDER_NOT_FOUND,
+                        lastError = result.message
+                    )
+                )
+                db.folderPermissionDao().getPermission(rule.treeUri)?.let { perm ->
+                    db.folderPermissionDao().insertOrUpdate(
+                        perm.copy(
+                            status = RuleStatus.FOLDER_NOT_FOUND,
+                            lastVerifiedAt = System.currentTimeMillis(),
+                            errorMessage = result.message
+                        )
+                    )
+                }
+                0
+            }
+
+            is FolderInspectionResult.Success -> {
+                val includeAudio = rule.ruleType == RuleType.FOLDER || rule.ruleType == RuleType.MUSIC_FOLDER
+                val includeVideo = rule.ruleType == RuleType.FOLDER || rule.ruleType == RuleType.VIDEO_FOLDER
+
+                val matchedAudioCount = if (includeAudio) result.audioCount else 0
+                val matchedVideoCount = if (includeVideo) result.videoCount else 0
+
+                if (isWhitelist) {
+                    val existingAudio = db.audioTrackDao().getAllTracksSync()
+                    val existingVideos = db.videoTrackDao().getAllVideosSync()
+
+                    if (includeAudio) {
+                        // Remove old whitelist-only entries from this tree before inserting current snapshot
+                        // (so deleted files inside the folder are removed, while existing MediaStore entries stay intact)
+                        val existingStatsById = existingAudio.associateBy { it.id }
+                        db.audioTrackDao().deleteWhitelistTracksByTreeUri(rule.treeUri)
+
+                        val mediaStoreTracks = existingAudio.filter { !it.isWhitelistOnly }
+                        val toInsertAudio = mutableListOf<AudioTrack>()
+
+                        for (safTrack in result.audioTracks) {
+                            // Deduplicate against MediaStore tracks by matching canonical folder + filename/size or documentId
+                            val safFolderKey = StoragePathHelper.canonicalizeFolderKey(safTrack.folderPath, rule.treeUri)
+                            val safFileName = StoragePathHelper.extractDocIdFromUriString(safTrack.documentId).substringAfterLast('/')
+
+                            val duplicateMediaStore = mediaStoreTracks.find { ms ->
+                                val msFolderKey = StoragePathHelper.canonicalizeMediaParentFolder(ms.path, ms.folderPath)
+                                val msFileName = File(ms.path).name
+                                (msFolderKey == safFolderKey && msFileName.equals(safFileName, ignoreCase = true)) ||
+                                    (safTrack.fileSize > 0 && ms.fileSize == safTrack.fileSize && ms.title.equals(safTrack.title, ignoreCase = true))
+                            }
+
+                            if (duplicateMediaStore == null) {
+                                val prev = existingStatsById[safTrack.id]
+                                toInsertAudio.add(
+                                    safTrack.copy(
+                                        playCount = prev?.playCount ?: 0,
+                                        lastPlayedTimestamp = prev?.lastPlayedTimestamp ?: 0L,
+                                        isFavorite = prev?.isFavorite ?: false,
+                                        artworkUri = prev?.artworkUri ?: ""
+                                    )
+                                )
+                            } else {
+                                // Enrich existing MediaStore track with documentId/sourceTreeUri for seamless rule matching
+                                db.audioTrackDao().updateTrack(
+                                    duplicateMediaStore.copy(
+                                        documentId = safTrack.documentId,
+                                        sourceTreeUri = rule.treeUri
+                                    )
+                                )
+                            }
+                        }
+
+                        if (toInsertAudio.isNotEmpty()) {
+                            db.audioTrackDao().insertTracks(toInsertAudio)
+                        }
+                    }
+
+                    if (includeVideo) {
+                        val existingVidsById = existingVideos.associateBy { it.id }
+                        db.videoTrackDao().deleteWhitelistVideosByTreeUri(rule.treeUri)
+
+                        val mediaStoreVideos = existingVideos.filter { !it.isWhitelistOnly }
+                        val toInsertVideos = mutableListOf<VideoTrack>()
+
+                        for (safVideo in result.videoTracks) {
+                            val safFolderKey = StoragePathHelper.canonicalizeFolderKey(safVideo.folderPath, rule.treeUri)
+                            val safFileName = safVideo.documentId.substringAfterLast('/')
+
+                            val duplicateMediaStore = mediaStoreVideos.find { ms ->
+                                val msFolderKey = StoragePathHelper.canonicalizeMediaParentFolder(ms.path, ms.folderPath)
+                                val msFileName = File(ms.path).name
+                                (msFolderKey == safFolderKey && msFileName.equals(safFileName, ignoreCase = true)) ||
+                                    (safVideo.fileSize > 0 && ms.fileSize == safVideo.fileSize && ms.title.equals(safVideo.title, ignoreCase = true))
+                            }
+
+                            if (duplicateMediaStore == null) {
+                                val prev = existingVidsById[safVideo.id]
+                                toInsertVideos.add(
+                                    safVideo.copy(
+                                        watchProgressMs = prev?.watchProgressMs ?: 0L,
+                                        lastWatchedTimestamp = prev?.lastWatchedTimestamp ?: 0L,
+                                        isFavorite = prev?.isFavorite ?: false,
+                                        inWatchLater = prev?.inWatchLater ?: false
+                                    )
+                                )
+                            } else {
+                                db.videoTrackDao().updateVideo(
+                                    duplicateMediaStore.copy(
+                                        documentId = safVideo.documentId,
+                                        sourceTreeUri = rule.treeUri
+                                    )
+                                )
+                            }
+                        }
+
+                        if (toInsertVideos.isNotEmpty()) {
+                            db.videoTrackDao().insertVideos(toInsertVideos)
+                        }
+                    }
+                }
+
+                db.folderRuleDao().update(
+                    rule.copy(
+                        displayName = result.displayName,
+                        displayPath = result.displayPath,
+                        affectedMediaCount = matchedAudioCount + matchedVideoCount,
+                        subfolderCount = result.subfolderCount,
+                        status = if (rule.status == RuleStatus.DISABLED) RuleStatus.DISABLED else RuleStatus.ACTIVE,
+                        lastScannedAt = System.currentTimeMillis(),
+                        lastError = ""
+                    )
+                )
+                db.folderPermissionDao().getPermission(rule.treeUri)?.let { perm ->
+                    db.folderPermissionDao().insertOrUpdate(
+                        perm.copy(
+                            displayName = result.displayName,
+                            hasReadPermission = true,
+                            status = RuleStatus.ACTIVE,
+                            lastVerifiedAt = System.currentTimeMillis(),
+                            errorMessage = ""
+                        )
+                    )
+                }
+
+                matchedAudioCount + matchedVideoCount
+            }
+        }
     }
 
     suspend fun importAudioUri(uri: Uri): AudioTrack? = withContext(Dispatchers.IO) {

@@ -27,7 +27,67 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.sangeet.data.model.AudioTrack
+import android.net.Uri
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import com.example.sangeet.scanner.ArtworkManager
+import java.io.File
 import kotlin.math.*
+
+@Composable
+fun TrackArtwork(
+    track: AudioTrack?,
+    modifier: Modifier = Modifier,
+    shape: Shape = RoundedCornerShape(16.dp),
+    contentDescription: String? = "Album Artwork"
+) {
+    val context = LocalContext.current
+    var resolvedPath by remember(track?.id, track?.artworkUri) {
+        mutableStateOf<String?>(track?.artworkUri?.takeIf { it.isNotBlank() })
+    }
+
+    LaunchedEffect(track?.id) {
+        if (track != null && (resolvedPath == null || resolvedPath!!.isBlank())) {
+            val artManager = ArtworkManager(context)
+            resolvedPath = artManager.resolveArtwork(track)
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(
+                Brush.linearGradient(
+                    listOf(
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+                        MaterialTheme.colorScheme.secondary.copy(alpha = 0.2f)
+                    )
+                )
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        if (!resolvedPath.isNullOrBlank()) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(if (resolvedPath!!.startsWith("content://")) Uri.parse(resolvedPath) else File(resolvedPath!!))
+                    .crossfade(true)
+                    .build(),
+                contentDescription = contentDescription,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Rounded.MusicNote,
+                contentDescription = contentDescription,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(28.dp)
+            )
+        }
+    }
+}
 
 @Composable
 fun MiniPlayer(
@@ -69,28 +129,12 @@ fun MiniPlayer(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Album Art Placeholder / Disc icon
-                Box(
-                    modifier = Modifier
-                        .size(46.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(
-                            Brush.linearGradient(
-                                listOf(
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
-                                    MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f)
-                                )
-                            )
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.MusicNote,
-                        contentDescription = "Cover",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
+                // Album Art
+                TrackArtwork(
+                    track = currentTrack,
+                    modifier = Modifier.size(46.dp),
+                    shape = RoundedCornerShape(12.dp)
+                )
 
                 Spacer(modifier = Modifier.width(12.dp))
 

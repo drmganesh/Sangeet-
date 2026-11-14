@@ -1,5 +1,9 @@
 package com.example.sangeet.ui.screens.player
 
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -17,13 +21,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.sangeet.data.model.AudioTrack
-import com.example.sangeet.scanner.LrcParser
+import com.example.sangeet.data.repository.SettingsRepository
+import com.example.sangeet.scanner.LyricsManager
 import kotlinx.coroutines.launch
 
 @Composable
@@ -34,14 +40,49 @@ fun LyricsSheetContent(
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    val lyricsManager = remember { LyricsManager(context) }
+    val settingsRepo = remember { SettingsRepository.getInstance(context) }
 
+    val persistedFontSize by settingsRepo.lyricsFontSize.collectAsState(initial = 18f)
+
+    var rawLyricsText by remember { mutableStateOf("") }
     var timingOffsetMs by remember { mutableLongStateOf(0L) }
-    val effectivePosition = currentPositionMs + timingOffsetMs
+    var isLoaded by remember { mutableStateOf(false) }
 
-    val lyricsLines = remember(track.embeddedLyrics) {
-        LrcParser.parse(track.embeddedLyrics)
+    var showEditDialog by remember { mutableStateOf(false) }
+    var editText by remember { mutableStateOf("") }
+
+    // Resolve lyrics from DB/embedded/sibling files
+    LaunchedEffect(track.id) {
+        val (lyrics, offset) = lyricsManager.resolveLyrics(track)
+        rawLyricsText = lyrics
+        timingOffsetMs = offset
+        isLoaded = true
+    }
+
+    val filePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            coroutineScope.launch {
+                val content = lyricsManager.readLyricsFromUri(uri)
+                if (content.isNotBlank()) {
+                    rawLyricsText = content
+                    lyricsManager.saveCustomLyrics(track.id, content, timingOffsetMs)
+                    Toast.makeText(context, "Lyrics file loaded", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "Could not read lyrics file", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    val effectivePosition = currentPositionMs + timingOffsetMs
+    val lyricsLines = remember(rawLyricsText, timingOffsetMs) {
+        lyricsManager.parseLyrics(rawLyricsText, timingOffsetMs)
     }
 
     val currentLineIndex = remember(lyricsLines, effectivePosition) {
@@ -69,9 +110,9 @@ fun LyricsSheetContent(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "OFFLINE LYRICS",
+                    text = "OFFLINE LYRICS & SYNC",
                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -83,8 +124,19 @@ fun LyricsSheetContent(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            IconButton(onClick = onClose) {
-                Icon(Icons.Rounded.Close, contentDescription = "Close")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = {
+                    editText = rawLyricsText
+                    showEditDialog = true
+                }) {
+                    Icon(Icons.Rounded.Edit, contentDescription = "Edit Lyrics", tint = MaterialTheme.colorScheme.primary)
+                }
+                IconButton(onClick = { filePicker.launch("*/*") }) {
+                    Icon(Icons.Rounded.FileUpload, contentDescription = "Import .LRC File", tint = MaterialTheme.colorScheme.primary)
+                }
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Rounded.Close, contentDescription = "Close")
+                }
             }
         }
 
@@ -92,25 +144,51 @@ fun LyricsSheetContent(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 8.dp),
+                .padding(vertical = 6.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
             FilledTonalIconButton(
-                onClick = { timingOffsetMs -= 500L },
+                onClick = {
+                    timingOffsetMs -= 500L
+                    coroutineScope.launch { lyricsManager.updateLyricsOffset(track.id, timingOffsetMs) }
+                },
                 modifier = Modifier.size(36.dp)
             ) {
                 Text("-0.5s", style = MaterialTheme.typography.labelSmall)
             }
+            Spacer(modifier = Modifier.width(8.dp))
+            FilledTonalIconButton(
+                onClick = {
+                    timingOffsetMs -= 100L
+                    coroutineScope.launch { lyricsManager.updateLyricsOffset(track.id, timingOffsetMs) }
+                },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Text("-0.1s", style = MaterialTheme.typography.labelSmall)
+            }
             Spacer(modifier = Modifier.width(12.dp))
             Text(
                 text = "Sync: ${if (timingOffsetMs >= 0) "+" else ""}${timingOffsetMs / 1000f}s",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.primary
             )
             Spacer(modifier = Modifier.width(12.dp))
             FilledTonalIconButton(
-                onClick = { timingOffsetMs += 500L },
+                onClick = {
+                    timingOffsetMs += 100L
+                    coroutineScope.launch { lyricsManager.updateLyricsOffset(track.id, timingOffsetMs) }
+                },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Text("+0.1s", style = MaterialTheme.typography.labelSmall)
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            FilledTonalIconButton(
+                onClick = {
+                    timingOffsetMs += 500L
+                    coroutineScope.launch { lyricsManager.updateLyricsOffset(track.id, timingOffsetMs) }
+                },
                 modifier = Modifier.size(36.dp)
             ) {
                 Text("+0.5s", style = MaterialTheme.typography.labelSmall)
@@ -135,17 +213,23 @@ fun LyricsSheetContent(
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "No Synchronized Lyrics Found",
+                        text = "No Offline Lyrics Found",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Place a matching .lrc file in the same folder or embed lyrics into the audio file tags.",
+                        text = "Place a matching .lrc or .txt file in the folder, or tap the upload icon above to select a file from device storage.",
                         style = MaterialTheme.typography.bodySmall,
                         textAlign = TextAlign.Center,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(onClick = { filePicker.launch("*/*") }) {
+                        Icon(Icons.Rounded.FolderOpen, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Pick .LRC File")
+                    }
                 }
             }
         } else {
@@ -157,7 +241,7 @@ fun LyricsSheetContent(
                 itemsIndexed(lyricsLines) { index, line ->
                     val isCurrent = index == currentLineIndex
                     val textColor by animateColorAsState(
-                        targetValue = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                        targetValue = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
                         label = "lyricColor"
                     )
 
@@ -171,9 +255,15 @@ fun LyricsSheetContent(
                         Text(
                             text = line.text,
                             style = if (isCurrent) {
-                                MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold)
+                                MaterialTheme.typography.headlineSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = (persistedFontSize + 4).sp
+                                )
                             } else {
-                                MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Normal)
+                                MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Normal,
+                                    fontSize = persistedFontSize.sp
+                                )
                             },
                             textAlign = TextAlign.Center,
                             color = textColor
@@ -182,6 +272,41 @@ fun LyricsSheetContent(
                 }
             }
         }
+    }
+
+    // Edit Lyrics Dialog
+    if (showEditDialog) {
+        AlertDialog(
+            onDismissRequest = { showEditDialog = false },
+            title = { Text("Edit Offline Lyrics") },
+            text = {
+                OutlinedTextField(
+                    value = editText,
+                    onValueChange = { editText = it },
+                    label = { Text("LRC or Plain Text") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(280.dp),
+                    placeholder = { Text("[00:01.00]Song lyrics line here...") }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        rawLyricsText = editText
+                        coroutineScope.launch {
+                            lyricsManager.saveCustomLyrics(track.id, editText, timingOffsetMs)
+                        }
+                        showEditDialog = false
+                    }
+                ) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditDialog = false }) { Text("Cancel") }
+            }
+        )
     }
 }
 

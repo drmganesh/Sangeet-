@@ -54,6 +54,15 @@ interface AudioTrackDao {
     @Update
     suspend fun updateTrack(track: AudioTrack)
 
+    @Query("UPDATE audio_tracks SET artworkUri = :artworkUri WHERE id = :id")
+    suspend fun updateTrackArtwork(id: Long, artworkUri: String)
+
+    @Query("UPDATE audio_tracks SET artworkUri = :artworkUri WHERE album = :album")
+    suspend fun updateAlbumArtwork(album: String, artworkUri: String)
+
+    @Query("UPDATE audio_tracks SET embeddedLyrics = :lyrics WHERE id = :id")
+    suspend fun updateTrackLyrics(id: Long, lyrics: String)
+
     @Query("UPDATE audio_tracks SET isFavorite = :isFav WHERE id = :id")
     suspend fun setFavorite(id: Long, isFav: Boolean)
 
@@ -63,6 +72,12 @@ interface AudioTrackDao {
     @Query("DELETE FROM audio_tracks WHERE id = :id")
     suspend fun deleteTrack(id: Long)
 
+    @Query("DELETE FROM audio_tracks WHERE sourceTreeUri = :treeUri AND isWhitelistOnly = 1")
+    suspend fun deleteWhitelistTracksByTreeUri(treeUri: String)
+
+    @Query("SELECT * FROM audio_tracks")
+    suspend fun getAllTracksSync(): List<AudioTrack>
+
     @Query("SELECT COUNT(*) FROM audio_tracks")
     suspend fun getTrackCount(): Int
 }
@@ -71,6 +86,9 @@ interface AudioTrackDao {
 interface VideoTrackDao {
     @Query("SELECT * FROM video_tracks ORDER BY dateAdded DESC")
     fun getAllVideos(): Flow<List<VideoTrack>>
+
+    @Query("SELECT * FROM video_tracks")
+    suspend fun getAllVideosSync(): List<VideoTrack>
 
     @Query("SELECT * FROM video_tracks WHERE id = :id")
     suspend fun getVideoById(id: Long): VideoTrack?
@@ -84,6 +102,9 @@ interface VideoTrackDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertVideos(videos: List<VideoTrack>)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertVideo(video: VideoTrack)
+
     @Update
     suspend fun updateVideo(video: VideoTrack)
 
@@ -95,6 +116,9 @@ interface VideoTrackDao {
 
     @Query("DELETE FROM video_tracks WHERE id = :id")
     suspend fun deleteVideo(id: Long)
+
+    @Query("DELETE FROM video_tracks WHERE sourceTreeUri = :treeUri AND isWhitelistOnly = 1")
+    suspend fun deleteWhitelistVideosByTreeUri(treeUri: String)
 }
 
 @Dao
@@ -173,4 +197,136 @@ interface PresetDao {
 
     @Delete
     suspend fun deleteSpatialPreset(preset: SpatialPreset)
+}
+
+@Dao
+interface BlacklistDao {
+    @Query("SELECT * FROM blacklist_entries ORDER BY addedAt DESC")
+    fun getAllBlacklist(): Flow<List<BlacklistEntry>>
+
+    @Query("SELECT * FROM blacklist_entries ORDER BY addedAt DESC")
+    suspend fun getAllBlacklistSync(): List<BlacklistEntry>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(entry: BlacklistEntry): Long
+
+    @Query("DELETE FROM blacklist_entries WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM blacklist_entries WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>)
+
+    @Query("DELETE FROM blacklist_entries WHERE type = :type AND identifier = :identifier")
+    suspend fun deleteByTypeAndIdentifier(type: String, identifier: String)
+
+    @Query("DELETE FROM blacklist_entries")
+    suspend fun clearAll()
+}
+
+@Dao
+interface WhitelistDao {
+    @Query("SELECT * FROM whitelist_entries ORDER BY addedAt DESC")
+    fun getAllWhitelist(): Flow<List<WhitelistEntry>>
+
+    @Query("SELECT * FROM whitelist_entries ORDER BY addedAt DESC")
+    suspend fun getAllWhitelistSync(): List<WhitelistEntry>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(entry: WhitelistEntry): Long
+
+    @Query("DELETE FROM whitelist_entries WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM whitelist_entries WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>)
+
+    @Query("DELETE FROM whitelist_entries WHERE type = :type AND identifier = :identifier")
+    suspend fun deleteByTypeAndIdentifier(type: String, identifier: String)
+
+    @Query("DELETE FROM whitelist_entries")
+    suspend fun clearAll()
+}
+
+@Dao
+interface FolderRuleDao {
+    @Query("SELECT * FROM folder_rules ORDER BY creationDate DESC")
+    fun getAllFolderRules(): Flow<List<FolderRule>>
+
+    @Query("SELECT * FROM folder_rules ORDER BY creationDate DESC")
+    suspend fun getAllFolderRulesSync(): List<FolderRule>
+
+    @Query("SELECT * FROM folder_rules WHERE listKind = :kind ORDER BY creationDate DESC")
+    fun getFolderRulesByKind(kind: RuleListKind): Flow<List<FolderRule>>
+
+    @Query("SELECT * FROM folder_rules WHERE id = :id")
+    suspend fun getFolderRuleById(id: Long): FolderRule?
+
+    @Query("SELECT * FROM folder_rules WHERE id = :id")
+    fun getFolderRuleByIdFlow(id: Long): Flow<FolderRule?>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(rule: FolderRule): Long
+
+    @Update
+    suspend fun update(rule: FolderRule)
+
+    @Query("DELETE FROM folder_rules WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM folder_rules WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>)
+
+    @Query("DELETE FROM folder_rules WHERE listKind = :kind")
+    suspend fun clearByKind(kind: RuleListKind)
+}
+
+@Dao
+interface FolderPermissionDao {
+    @Query("SELECT * FROM folder_permissions ORDER BY grantedAt DESC")
+    fun getAllPermissions(): Flow<List<FolderPermission>>
+
+    @Query("SELECT * FROM folder_permissions")
+    suspend fun getAllPermissionsSync(): List<FolderPermission>
+
+    @Query("SELECT * FROM folder_permissions WHERE treeUri = :treeUri")
+    suspend fun getPermission(treeUri: String): FolderPermission?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOrUpdate(permission: FolderPermission)
+
+    @Query("DELETE FROM folder_permissions WHERE treeUri = :treeUri")
+    suspend fun deleteByUri(treeUri: String)
+}
+
+@Dao
+interface ArtworkDao {
+    @Query("SELECT * FROM album_artwork_entries WHERE albumKey = :albumKey")
+    suspend fun getArtwork(albumKey: String): AlbumArtworkEntry?
+
+    @Query("SELECT * FROM album_artwork_entries WHERE albumKey = :albumKey")
+    fun getArtworkFlow(albumKey: String): Flow<AlbumArtworkEntry?>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertArtwork(entry: AlbumArtworkEntry)
+
+    @Query("DELETE FROM album_artwork_entries WHERE albumKey = :albumKey")
+    suspend fun deleteArtwork(albumKey: String)
+
+    @Query("DELETE FROM album_artwork_entries")
+    suspend fun clearAll()
+}
+
+@Dao
+interface LyricsDao {
+    @Query("SELECT * FROM lyrics_metadata_entries WHERE trackId = :trackId")
+    suspend fun getLyrics(trackId: Long): LyricsMetadataEntry?
+
+    @Query("SELECT * FROM lyrics_metadata_entries WHERE trackId = :trackId")
+    fun getLyricsFlow(trackId: Long): Flow<LyricsMetadataEntry?>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertLyrics(entry: LyricsMetadataEntry)
+
+    @Query("DELETE FROM lyrics_metadata_entries WHERE trackId = :trackId")
+    suspend fun deleteLyrics(trackId: Long)
 }
