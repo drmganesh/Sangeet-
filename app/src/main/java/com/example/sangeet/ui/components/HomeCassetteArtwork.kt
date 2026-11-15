@@ -72,7 +72,10 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.sangeet.data.model.AudioTrack
+import com.example.sangeet.data.model.CassetteStyle
 import com.example.sangeet.scanner.ArtworkManager
+import com.example.sangeet.ui.screens.player.CassettePalette
+import com.example.sangeet.ui.screens.player.palette
 import java.io.File
 import kotlin.math.PI
 import kotlin.math.abs
@@ -174,36 +177,35 @@ fun CassettePrintedArtImage(
                 modifier = Modifier.fillMaxSize()
             )
         } else {
-            // Deterministic unique artwork palette & groove geometry seeded by track identity
+            // SANGEET Golden-Yellow Cassette Label Branding with subtle per-track groove geometry
             val seed = remember(track?.id, track?.title, track?.artist, track?.album) {
                 val raw = "${track?.title.orEmpty()}|${track?.artist.orEmpty()}|${track?.album.orEmpty()}"
                 abs(raw.hashCode())
             }
-            val hue1 = (seed % 360).toFloat()
-            val hue2 = ((seed + 58) % 360).toFloat()
-            val c1 = Color.hsv(hue = hue1, saturation = 0.72f, value = 0.76f)
-            val c2 = Color.hsv(hue = hue2, saturation = 0.64f, value = 0.42f)
+            val hue1 = (38f + (seed % 18)).coerceIn(36f, 54f)
+            val c1 = Color.hsv(hue = hue1, saturation = 0.85f, value = 0.88f)
+            val c2 = Color(0xFF6B4B09)
 
             Canvas(modifier = Modifier.fillMaxSize()) {
                 drawRect(
                     brush = Brush.linearGradient(
-                        colors = listOf(c1, c2, Color(0xFF151310)),
+                        colors = listOf(Color(0xFF17130B), c2, c1.copy(alpha = 0.78f)),
                         start = Offset(0f, 0f),
                         end = Offset(size.width, size.height)
                     )
                 )
-                val center = Offset(size.width * 0.76f, size.height * 0.55f)
+                val center = Offset(size.width * 0.78f, size.height * 0.56f)
                 val rMax = min(size.width, size.height) * 0.46f
                 for (ring in 1..3) {
                     drawCircle(
-                        color = Color.White.copy(alpha = 0.14f),
+                        color = CassetteGoldBright.copy(alpha = 0.24f),
                         radius = rMax * (ring / 3f),
                         center = center,
                         style = Stroke(width = 0.9.dp.toPx())
                     )
                 }
                 drawCircle(
-                    color = CassetteGoldBright.copy(alpha = 0.85f),
+                    color = CassetteGoldBright.copy(alpha = 0.92f),
                     radius = rMax * 0.24f,
                     center = center
                 )
@@ -220,21 +222,32 @@ fun CassettePrintedArtImage(
 fun CassetteShell(
     cornerRadius: Dp = 10.dp,
     compact: Boolean = false,
+    cassetteStyle: CassetteStyle = LocalCassetteStyle.current,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit
 ) {
+    val palette = remember(cassetteStyle) { cassetteStyle.palette() }
     val shape = RoundedCornerShape(cornerRadius)
     Box(
         modifier = modifier
             .clip(shape)
             .background(
                 Brush.verticalGradient(
-                    colors = listOf(CassetteBlackTop, Color(0xFF14161B), CassetteBlackBottom)
+                    colors = listOf(
+                        palette.shellPrimary.copy(alpha = palette.shellAlpha),
+                        palette.shellSecondary.copy(alpha = palette.shellAlpha)
+                    )
                 )
             )
             .border(
                 width = if (compact) 1.dp else 1.4.dp,
-                brush = Brush.linearGradient(listOf(CassetteGoldBright, CassetteGoldDark, CassetteGold)),
+                brush = Brush.linearGradient(
+                    listOf(
+                        palette.shellBorder,
+                        CassetteGoldDark.copy(alpha = 0.7f),
+                        palette.shellBorder
+                    )
+                ),
                 shape = shape
             )
     ) {
@@ -275,7 +288,7 @@ fun CassetteShell(
                     Offset(w * 0.5f, h - inset)
                 )
                 screws.forEach { s ->
-                    drawCircle(color = CassetteScrewSilver, radius = screwR, center = s)
+                    drawCircle(color = palette.screwMetal, radius = screwR, center = s)
                     drawLine(
                         color = Color(0xFF1C1E22),
                         start = Offset(s.x - screwR * 0.6f, s.y),
@@ -307,7 +320,7 @@ fun CassetteShell(
             )
             drawPath(
                 path = trapPath,
-                color = CassetteGold.copy(alpha = 0.40f),
+                color = palette.shellBorder.copy(alpha = 0.48f),
                 style = Stroke(width = 0.8.dp.toPx())
             )
             if (!compact) {
@@ -332,8 +345,10 @@ fun CassetteLabel(
     showMetadata: Boolean,
     compact: Boolean,
     crossfadeDurationMs: Int = 220,
+    cassetteStyle: CassetteStyle = LocalCassetteStyle.current,
     modifier: Modifier = Modifier
 ) {
+    val palette = remember(cassetteStyle) { cassetteStyle.palette() }
     val labelShape = RoundedCornerShape(if (compact) 4.dp else 6.dp)
     val sideTag = remember(track?.id, track?.trackNumber) {
         val n = track?.trackNumber?.takeIf { it > 0 } ?: (track?.id?.toInt() ?: 1)
@@ -345,7 +360,7 @@ fun CassetteLabel(
             .clip(labelShape)
             .border(
                 width = if (compact) 0.7.dp else 1.dp,
-                color = CassetteGold.copy(alpha = 0.68f),
+                color = palette.shellBorder.copy(alpha = 0.68f),
                 shape = labelShape
             )
     ) {
@@ -387,7 +402,7 @@ fun CassetteLabel(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(3.dp))
-                            .background(CassetteGold)
+                            .background(palette.labelStripe)
                             .padding(horizontal = 4.dp, vertical = 0.5.dp)
                     ) {
                         Text(
@@ -401,7 +416,7 @@ fun CassetteLabel(
                         )
                     }
                     Text(
-                        text = "SANGEET C-90",
+                        text = cassetteStyle.badgeText,
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontSize = 6.5.sp,
                             fontWeight = FontWeight.Bold,
@@ -444,7 +459,7 @@ fun CassetteLabel(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(2.5.dp)
-                    .background(CassetteGold.copy(alpha = 0.85f))
+                    .background(palette.labelStripe.copy(alpha = 0.90f))
             )
         }
     }
@@ -458,6 +473,7 @@ fun CassetteReels(
     rotationDegrees: Float,
     isPlaying: Boolean,
     compact: Boolean,
+    palette: CassettePalette = LocalCassetteStyle.current.palette(),
     modifier: Modifier = Modifier
 ) {
     Canvas(modifier = modifier) {
@@ -470,7 +486,7 @@ fun CassetteReels(
         // Visible oxide tape ribbon stretched between left and right reels
         val ribbonThickness = if (compact) 2.dp.toPx() else 3.dp.toPx()
         drawLine(
-            color = CassetteTapeBrown,
+            color = palette.tapeRibbon,
             start = Offset(leftCenter.x, leftCenter.y + reelRadius * 0.55f),
             end = Offset(rightCenter.x, rightCenter.y + reelRadius * 0.55f),
             strokeWidth = ribbonThickness
@@ -487,7 +503,7 @@ fun CassetteReels(
             // Outer wound tape pack
             val packR = reelRadius * (0.62f + 0.34f * packFactor)
             drawCircle(
-                color = CassetteTapeBrown,
+                color = palette.tapeRibbon,
                 radius = packR,
                 center = center
             )
@@ -495,8 +511,8 @@ fun CassetteReels(
             // Rotating 6-tooth hub
             val hubR = reelRadius * 0.60f
             rotate(degrees = rotationDegrees, pivot = center) {
-                drawCircle(color = CassetteHubCream, radius = hubR, center = center)
-                drawCircle(color = Color(0xFF1F2229), radius = hubR * 0.64f, center = center)
+                drawCircle(color = palette.reelFlange, radius = hubR, center = center)
+                drawCircle(color = palette.reelHub, radius = hubR * 0.64f, center = center)
                 val teeth = 6
                 for (i in 0 until teeth) {
                     val rad = (i * (360f / teeth)) * (PI / 180.0)
@@ -509,7 +525,7 @@ fun CassetteReels(
                         center.y + (sin(rad) * (hubR * 0.68f)).toFloat()
                     )
                     drawLine(
-                        color = CassetteHubCream,
+                        color = palette.reelFlange,
                         start = p0,
                         end = p1,
                         strokeWidth = (hubR * 0.25f).coerceAtLeast(1.dp.toPx()),
@@ -537,16 +553,18 @@ fun CassetteWindow(
     rotationDegrees: Float,
     isPlaying: Boolean,
     compact: Boolean,
+    cassetteStyle: CassetteStyle = LocalCassetteStyle.current,
     modifier: Modifier = Modifier
 ) {
+    val palette = remember(cassetteStyle) { cassetteStyle.palette() }
     val windowShape = RoundedCornerShape(if (compact) 4.dp else 7.dp)
     Box(
         modifier = modifier
             .clip(windowShape)
-            .background(CassetteWindowDark)
+            .background(palette.windowTint)
             .border(
                 width = if (compact) 0.7.dp else 1.dp,
-                color = CassetteGold.copy(alpha = 0.55f),
+                color = palette.shellBorder.copy(alpha = 0.55f),
                 shape = windowShape
             )
     ) {
@@ -554,6 +572,7 @@ fun CassetteWindow(
             rotationDegrees = rotationDegrees,
             isPlaying = isPlaying,
             compact = compact,
+            palette = palette,
             modifier = Modifier.fillMaxSize()
         )
         // Glass specular reflection & graduated tape counter ticks
@@ -598,6 +617,7 @@ fun CassetteArtwork(
     showMetadataOnLabel: Boolean = true,
     compact: Boolean = false,
     crossfadeDurationMs: Int = 220,
+    cassetteStyle: CassetteStyle = LocalCassetteStyle.current,
     modifier: Modifier = Modifier
 ) {
     BoxWithConstraints(modifier = modifier) {
@@ -606,6 +626,7 @@ fun CassetteArtwork(
         CassetteShell(
             cornerRadius = if (compact) 7.dp else 12.dp,
             compact = compact,
+            cassetteStyle = cassetteStyle,
             modifier = Modifier.fillMaxSize()
         ) {
             Column(
@@ -619,6 +640,7 @@ fun CassetteArtwork(
                     showMetadata = showMetadataOnLabel,
                     compact = compact,
                     crossfadeDurationMs = crossfadeDurationMs,
+                    cassetteStyle = cassetteStyle,
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(if (compact) 0.50f else 0.48f)
@@ -628,6 +650,7 @@ fun CassetteArtwork(
                     rotationDegrees = reelAngleDegrees,
                     isPlaying = isPlaying,
                     compact = compact,
+                    cassetteStyle = cassetteStyle,
                     modifier = Modifier
                         .fillMaxWidth(if (compact) 0.88f else 0.86f)
                         .weight(if (compact) 0.34f else 0.36f)
@@ -639,7 +662,7 @@ fun CassetteArtwork(
 }
 
 /**
- * Miniature cassette presentation for MiniPlayer and compact Home list rows.
+ * Miniature cassette presentation for MiniPlayer and compact list rows.
  */
 @Composable
 fun MiniCassetteArtwork(
@@ -647,6 +670,7 @@ fun MiniCassetteArtwork(
     isPlaying: Boolean = false,
     reelAngleDegrees: Float = 0f,
     crossfadeDurationMs: Int = 200,
+    cassetteStyle: CassetteStyle = LocalCassetteStyle.current,
     modifier: Modifier = Modifier
 ) {
     CassetteArtwork(
@@ -656,6 +680,7 @@ fun MiniCassetteArtwork(
         showMetadataOnLabel = false,
         compact = true,
         crossfadeDurationMs = crossfadeDurationMs,
+        cassetteStyle = cassetteStyle,
         modifier = modifier
             .aspectRatio(1.56f)
             .shadow(6.dp, RoundedCornerShape(7.dp))
@@ -663,7 +688,7 @@ fun MiniCassetteArtwork(
 }
 
 /**
- * Reusable cassette card presentation used for Quick Picks, Local Mix, and Home carousels.
+ * Reusable cassette card presentation used for Quick Picks, Albums grid, and carousels.
  */
 @Composable
 fun CassetteArtworkCard(
@@ -672,6 +697,7 @@ fun CassetteArtworkCard(
     isAudioPlaying: Boolean,
     isVisible: Boolean,
     crossfadeDurationMs: Int,
+    cassetteStyle: CassetteStyle = LocalCassetteStyle.current,
     modifier: Modifier = Modifier
 ) {
     val activeSpin = isCurrentlyPlaying && isAudioPlaying && isVisible
@@ -680,6 +706,7 @@ fun CassetteArtworkCard(
         isActivelyPlayingAndVisible = activeSpin,
         seedAngleDegrees = seedAngle
     )
+    val palette = remember(cassetteStyle) { cassetteStyle.palette() }
 
     Surface(
         modifier = modifier,
@@ -687,7 +714,7 @@ fun CassetteArtworkCard(
         color = Color(0xFF0A0B0E),
         border = BorderStroke(
             width = if (isCurrentlyPlaying) 1.5.dp else 0.9.dp,
-            color = if (isCurrentlyPlaying) CassetteGoldBright else CassetteGold.copy(alpha = 0.25f)
+            color = if (isCurrentlyPlaying) CassetteGoldBright else palette.shellBorder.copy(alpha = 0.32f)
         ),
         shadowElevation = if (isCurrentlyPlaying) 10.dp else 4.dp
     ) {
@@ -704,6 +731,7 @@ fun CassetteArtworkCard(
                 showMetadataOnLabel = true,
                 compact = false,
                 crossfadeDurationMs = crossfadeDurationMs,
+                cassetteStyle = cassetteStyle,
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(1.54f)

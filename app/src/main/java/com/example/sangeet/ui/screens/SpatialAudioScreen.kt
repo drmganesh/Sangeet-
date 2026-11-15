@@ -20,6 +20,9 @@ import androidx.compose.ui.unit.sp
 import com.example.sangeet.data.model.SpatialPreset
 import com.example.sangeet.data.repository.MediaRepository
 import com.example.sangeet.playback.PlaybackManager
+import com.example.sangeet.ui.components.CassetteSectionCard
+import com.example.sangeet.ui.components.CassetteSectionHeader
+import com.example.sangeet.ui.components.CassetteTopBar
 import com.example.sangeet.ui.components.RadarSpatialView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -76,29 +79,11 @@ fun SpatialAudioScreen(
             .fillMaxSize()
             .testTag("spatial_audio_screen"),
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = "SANGEET 360° SPATIAL AUDIO",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = if (isEnabled) "Rotating Binaural Surround Active" else "Spatial Audio Disabled",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (isEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(
-                        onClick = onNavigateBack,
-                        modifier = Modifier.testTag("spatial_back_btn")
-                    ) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back")
-                    }
-                },
+            CassetteTopBar(
+                title = "360° Spatial Audio",
+                subtitle = if (isEnabled) "Rotating Binaural Surround Active" else "Spatial Audio Disabled",
+                badgeText = "360°",
+                onNavigateBack = onNavigateBack,
                 actions = {
                     Switch(
                         checked = isEnabled,
@@ -123,13 +108,7 @@ fun SpatialAudioScreen(
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             // Headphone Recommendation Banner
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-                ),
-                shape = RoundedCornerShape(16.dp)
-            ) {
+            CassetteSectionCard(highlighted = isEnabled) {
                 Row(
                     modifier = Modifier.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -157,31 +136,15 @@ fun SpatialAudioScreen(
             }
 
             // Interactive 360° Radar Canvas
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(24.dp)
-            ) {
+            CassetteSectionCard(highlighted = isEnabled) {
                 Column(
                     modifier = Modifier.padding(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "SOUNDSTAGE RADAR",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            text = "Azimuth: ${liveAzimuthDegrees.toInt()}°",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    CassetteSectionHeader(
+                        title = "Soundstage Radar",
+                        badgeText = "AZIMUTH ${liveAzimuthDegrees.toInt()}°"
+                    )
 
                     RadarSpatialView(
                         azimuthDegrees = liveAzimuthDegrees,
@@ -234,20 +197,12 @@ fun SpatialAudioScreen(
             }
 
             // Rotation & Trajectory Controls
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(20.dp)
-            ) {
+            CassetteSectionCard {
                 Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Text(
-                        text = "ROTATION & TRAJECTORY",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    CassetteSectionHeader(title = "Rotation & Trajectory")
 
                     // Direction Choice
                     Text("Sound Movement Pattern", style = MaterialTheme.typography.bodyMedium)
@@ -298,20 +253,12 @@ fun SpatialAudioScreen(
             }
 
             // Soundstage Dimensions & Intensity
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(20.dp)
-            ) {
+            CassetteSectionCard {
                 Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Text(
-                        text = "ACOUSTIC DIMENSIONS",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    CassetteSectionHeader(title = "Acoustic Dimensions")
 
                     // Spatial Intensity Slider
                     Column {

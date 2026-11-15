@@ -591,6 +591,16 @@ class MediaRepository(private val context: Context) {
         return db.playlistDao().insertPlaylist(Playlist(name = name))
     }
 
+    suspend fun renamePlaylist(playlistId: Long, newName: String) {
+        if (newName.isNotBlank()) {
+            db.playlistDao().renamePlaylist(playlistId, newName.trim())
+        }
+    }
+
+    suspend fun updatePlaylistArtwork(playlistId: Long, artworkUri: String) {
+        db.playlistDao().updatePlaylistArtwork(playlistId, artworkUri)
+    }
+
     suspend fun deletePlaylist(playlistId: Long) {
         db.playlistDao().deletePlaylist(playlistId)
         db.playlistDao().clearPlaylistTracks(playlistId)
@@ -598,6 +608,24 @@ class MediaRepository(private val context: Context) {
 
     suspend fun addTrackToPlaylist(playlistId: Long, trackId: Long) {
         db.playlistDao().addTrackToPlaylist(PlaylistTrack(playlistId = playlistId, trackId = trackId))
+    }
+
+    suspend fun addTracksToPlaylist(playlistId: Long, trackIds: List<Long>) {
+        if (trackIds.isEmpty()) return
+        val items = trackIds.mapIndexed { idx, id ->
+            PlaylistTrack(playlistId = playlistId, trackId = id, sortOrder = idx)
+        }
+        db.playlistDao().insertPlaylistTracks(items)
+    }
+
+    suspend fun reorderPlaylistTracks(playlistId: Long, orderedTrackIds: List<Long>) {
+        db.playlistDao().clearPlaylistTracks(playlistId)
+        val items = orderedTrackIds.mapIndexed { idx, trackId ->
+            PlaylistTrack(playlistId = playlistId, trackId = trackId, sortOrder = idx)
+        }
+        if (items.isNotEmpty()) {
+            db.playlistDao().insertPlaylistTracks(items)
+        }
     }
 
     suspend fun removeTrackFromPlaylist(playlistId: Long, trackId: Long) {

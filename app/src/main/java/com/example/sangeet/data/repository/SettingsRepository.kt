@@ -185,16 +185,19 @@ class SettingsRepository(private val context: Context) {
     }
 
     val accentColor: Flow<AccentColor> = safePreferences.map { prefs ->
-        val name = prefs[KEY_ACCENT_COLOR] ?: AccentColor.CYAN.name
-        try { AccentColor.valueOf(name) } catch (_: Exception) { AccentColor.CYAN }
+        val name = prefs[KEY_ACCENT_COLOR] ?: AccentColor.GOLD.name
+        try { AccentColor.valueOf(name) } catch (_: Exception) { AccentColor.GOLD }
     }
 
     val dynamicArtworkColor: Flow<Boolean> = safePreferences.map { it[KEY_DYNAMIC_ARTWORK_COLOR] ?: true }
 
     // --- Walkman Player Flows ---
     val cassetteStyle: Flow<CassetteStyle> = safePreferences.map { prefs ->
-        val name = prefs[KEY_CASSETTE_STYLE] ?: CassetteStyle.CLASSIC_BLACK.name
-        try { CassetteStyle.valueOf(name) } catch (_: Exception) { CassetteStyle.CLASSIC_BLACK }
+        val name = prefs[KEY_CASSETTE_STYLE] ?: CassetteStyle.BLACK_AND_GOLD.name
+        when (name) {
+            "PREMIUM_METALLIC" -> CassetteStyle.GOLDEN
+            else -> try { CassetteStyle.valueOf(name) } catch (_: Exception) { CassetteStyle.BLACK_AND_GOLD }
+        }
     }
 
     val walkmanMechanicalSounds: Flow<Boolean> = safePreferences.map {

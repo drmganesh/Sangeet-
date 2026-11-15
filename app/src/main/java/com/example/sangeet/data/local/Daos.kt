@@ -135,6 +135,12 @@ interface PlaylistDao {
     @Update
     suspend fun updatePlaylist(playlist: Playlist)
 
+    @Query("UPDATE playlists SET name = :name WHERE id = :id")
+    suspend fun renamePlaylist(id: Long, name: String)
+
+    @Query("UPDATE playlists SET customArtworkUri = :artworkUri WHERE id = :id")
+    suspend fun updatePlaylistArtwork(id: Long, artworkUri: String)
+
     @Query("DELETE FROM playlists WHERE id = :id")
     suspend fun deletePlaylist(id: Long)
 
@@ -143,6 +149,9 @@ interface PlaylistDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun addTrackToPlaylist(playlistTrack: PlaylistTrack)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPlaylistTracks(items: List<PlaylistTrack>)
 
     @Query("DELETE FROM playlist_tracks WHERE playlistId = :playlistId AND trackId = :trackId")
     suspend fun removeTrackFromPlaylist(playlistId: Long, trackId: Long)

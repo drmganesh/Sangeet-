@@ -64,7 +64,7 @@ class PlaybackManager private constructor(private val context: Context) {
     private val _sleepTimerSeconds = MutableStateFlow<Int?>(null)
     val sleepTimerSeconds: StateFlow<Int?> = _sleepTimerSeconds.asStateFlow()
 
-    private val _cassetteStyle = MutableStateFlow(CassetteStyle.CLASSIC_BLACK)
+    private val _cassetteStyle = MutableStateFlow(CassetteStyle.BLACK_AND_GOLD)
     val cassetteStyle: StateFlow<CassetteStyle> = _cassetteStyle.asStateFlow()
 
     private val _walkmanMechanicalSounds = MutableStateFlow(false)
@@ -755,10 +755,47 @@ class PlaybackManager private constructor(private val context: Context) {
 
     fun reorderQueue(fromIndex: Int, toIndex: Int) {
         val currentList = _queue.value.toMutableList()
-        if (fromIndex in currentList.indices && toIndex in currentList.indices) {
-            Collections.swap(currentList, fromIndex, toIndex)
+        if (fromIndex in currentList.indices && toIndex in currentList.indices && fromIndex != toIndex) {
+            val item = currentList.removeAt(fromIndex)
+            currentList.add(toIndex, item)
             _queue.value = currentList
-            exoPlayer.moveMediaItem(fromIndex, toIndex)
+            if (fromIndex < exoPlayer.mediaItemCount && toIndex < exoPlayer.mediaItemCount) {
+                exoPlayer.moveMediaItem(fromIndex, toIndex)
+            }
+            persistCurrentPlaybackSnapshot()
+        }
+    }
+
+    fun moveQueueItemToPlayNext(fromIndex: Int) {
+        val currentList = _queue.value
+        val currentPlayingId = _currentTrack.value?.id
+        val playingIdx = currentList.indexOfFirst { it.id == currentPlayingId }.coerceAtLeast(0)
+        val targetIdx = if (fromIndex <= playingIdx) playingIdx else (playingIdx + 1).coerceAtMost(currentList.lastIndex)
+        if (fromIndex in currentList.indices && targetIdx in currentList.indices && fromIndex != targetIdx) {
+            reorderQueue(fromIndex, targetIdx)
+        }
+    }
+
+    fun clearQueue(keepCurrent: Boolean = true) {
+        val current = _currentTrack.value
+        if (keepCurrent && current != null) {
+            val curIdx = exoPlayer.currentMediaItemIndex
+            if (exoPlayer.mediaItemCount > 1 && curIdx in 0 until exoPlayer.mediaItemCount) {
+                for (i in (exoPlayer.mediaItemCount - 1) downTo 0) {
+                    if (i != curIdx) {
+                        exoPlayer.removeMediaItem(i)
+                    }
+                }
+            }
+            _queue.value = listOf(current)
+            persistCurrentPlaybackSnapshot()
+        } else {
+            exoPlayer.stop()
+            exoPlayer.clearMediaItems()
+            _queue.value = emptyList()
+            _currentTrack.value = null
+            _isPlaying.value = false
+            _isStopped.value = true
         }
     }
 
@@ -767,7 +804,14 @@ class PlaybackManager private constructor(private val context: Context) {
         if (index in currentList.indices) {
             currentList.removeAt(index)
             _queue.value = currentList
-            exoPlayer.removeMediaItem(index)
+            if (index < exoPlayer.mediaItemCount) {
+                exoPlayer.removeMediaItem(index)
+            }
+            if (currentList.isEmpty()) {
+                _currentTrack.value = null
+                _isPlaying.value = false
+            }
+            persistCurrentPlaybackSnapshot()
         }
     }
 

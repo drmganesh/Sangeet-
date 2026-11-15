@@ -34,6 +34,7 @@ import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.sangeet.scanner.ArtworkManager
+import com.example.sangeet.ui.screens.player.palette
 import java.io.File
 import kotlin.math.*
 
@@ -153,14 +154,21 @@ fun MiniPlayer(
         label = "miniGlowAlpha"
     )
 
+    val activeCassetteStyle = LocalCassetteStyle.current
+    val cassettePalette = remember(activeCassetteStyle) { activeCassetteStyle.palette() }
+
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 6.dp)
-            .shadow(12.dp, RoundedCornerShape(18.dp))
+            .shadow(14.dp, RoundedCornerShape(18.dp))
             .clip(RoundedCornerShape(18.dp))
             .testTag("mini_player"),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f),
+        border = androidx.compose.foundation.BorderStroke(
+            width = if (isPlaying) 1.2.dp else 0.9.dp,
+            color = if (isPlaying) MaterialTheme.colorScheme.primary.copy(alpha = 0.72f) else cassettePalette.shellBorder.copy(alpha = 0.35f)
+        ),
         tonalElevation = 6.dp,
         onClick = onClick
     ) {
@@ -172,7 +180,7 @@ fun MiniPlayer(
                     .fillMaxWidth()
                     .height(2.5.dp),
                 color = MaterialTheme.colorScheme.primary,
-                trackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                trackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
             )
 
             Row(

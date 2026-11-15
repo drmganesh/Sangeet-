@@ -2,7 +2,10 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Brand accents
+// Brand & Cassette Accents
+val SangeetGold = Color(0xFFE8B429)
+val SangeetGoldBright = Color(0xFFFFD666)
+val SangeetGoldDark = Color(0xFF8C640F)
 val SangeetCyan = Color(0xFF00E5FF)
 val SangeetCyanGradientEnd = Color(0xFF0091EA)
 val SangeetCyanContainer = Color(0xFF00363D)
@@ -12,17 +15,20 @@ val NeonAmber = Color(0xFFFFB300)
 val EmeraldGreen = Color(0xFF00E676)
 val ElectricRose = Color(0xFFFF2A6D)
 
-// AMOLED & Dark Surfaces
+// AMOLED & Cassette Surfaces
 val AmoledBlack = Color(0xFF000000)
-val DarkBackground = Color(0xFF0A0E17)
-val DarkSurface = Color(0xFF111827)
-val DarkSurfaceElevated = Color(0xFF1A2338)
-val DarkSurfaceBorder = Color(0xFF26334D)
+val CassetteSurfaceDark = Color(0xFF0B0C0F)
+val CassetteCardSurface = Color(0xFF13151B)
+val CassetteBorderGold = Color(0xFF2E2513)
+val DarkBackground = Color(0xFF08090C)
+val DarkSurface = Color(0xFF101217)
+val DarkSurfaceElevated = Color(0xFF181B22)
+val DarkSurfaceBorder = Color(0xFF282D38)
 
 // Text & Icons
-val TextPrimaryDark = Color(0xFFF3F4F6)
-val TextSecondaryDark = Color(0xFF9CA3AF)
-val TextTertiaryDark = Color(0xFF6B7280)
+val TextPrimaryDark = Color(0xFFF5F2EA)
+val TextSecondaryDark = Color(0xFFA8A396)
+val TextTertiaryDark = Color(0xFF6F6B60)
 
 // Waveform & Visualizer
 val WaveformGlow = Color(0xFF00E5FF)

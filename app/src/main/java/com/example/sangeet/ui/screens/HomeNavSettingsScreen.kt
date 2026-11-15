@@ -28,6 +28,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.sangeet.data.repository.SettingsRepository
+import com.example.sangeet.ui.components.CassetteSectionCard
+import com.example.sangeet.ui.components.CassetteSectionHeader
+import com.example.sangeet.ui.components.CassetteTopBar
 import kotlinx.coroutines.launch
 import java.util.Calendar
 
@@ -67,32 +70,11 @@ fun HomeNavSettingsScreen(
             .fillMaxSize()
             .testTag("home_nav_settings_screen"),
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = "Home and Navigation",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "Customize layout, navigation bar, and launch behavior",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(
-                        onClick = onNavigateBack,
-                        modifier = Modifier.testTag("home_nav_back_btn")
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = "Back"
-                        )
-                    }
-                },
+            CassetteTopBar(
+                title = "Home & Navigation",
+                subtitle = "Customize layout, navigation bar, and launch behavior",
+                badgeText = "DECK UI",
+                onNavigateBack = onNavigateBack,
                 actions = {
                     IconButton(
                         onClick = { showResetDialog = true },
@@ -119,20 +101,12 @@ fun HomeNavSettingsScreen(
             // 1. WHEN SANGEET OPENS
             // ==========================================
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(20.dp)
-                ) {
+                CassetteSectionCard {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        Text(
-                            text = "WHEN SANGEET OPENS",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        CassetteSectionHeader(title = "When Sangeet Opens")
 
                         // Start Screen
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -234,20 +208,12 @@ fun HomeNavSettingsScreen(
             // 2. HOME TOP BAR
             // ==========================================
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(20.dp)
-                ) {
+                CassetteSectionCard {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text(
-                            text = "HOME TOP BAR",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        CassetteSectionHeader(title = "Home Top Bar")
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -309,20 +275,12 @@ fun HomeNavSettingsScreen(
             // 3. HOME LAYOUT
             // ==========================================
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(20.dp)
-                ) {
+                CassetteSectionCard {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        Text(
-                            text = "HOME LAYOUT STYLE",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        CassetteSectionHeader(title = "Home Layout Style")
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -593,20 +551,12 @@ fun HomeNavSettingsScreen(
             // 4. NAVIGATION BAR SETTINGS
             // ==========================================
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(20.dp)
-                ) {
+                CassetteSectionCard {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        Text(
-                            text = "NAVIGATION BAR BEHAVIOR",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        CassetteSectionHeader(title = "Navigation Bar Behavior")
 
                         // Tab Names Mode
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -684,20 +634,12 @@ fun HomeNavSettingsScreen(
             // 5. DISPLAY SETTINGS
             // ==========================================
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(20.dp)
-                ) {
+                CassetteSectionCard {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text(
-                            text = "DISPLAY & ORIENTATION",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        CassetteSectionHeader(title = "Display & Orientation")
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),

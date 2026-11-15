@@ -5,6 +5,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -59,6 +60,9 @@ fun FilesScreen(
     val mediaFolders by repository.mediaFolders.collectAsState(initial = emptyList())
     val blacklistEntries by repository.blacklist.collectAsState(initial = emptyList())
     val whitelistEntries by repository.whitelist.collectAsState(initial = emptyList())
+    val currentPlayingTrack by playbackManager.currentTrack.collectAsState()
+    val isAudioPlaying by playbackManager.isPlaying.collectAsState()
+    val isAppResumed by rememberIsAppResumed()
 
     val totalAudioBytes = remember(allTracks) { allTracks.sumOf { it.fileSize } }
     val totalVideoBytes = remember(allVideos) { allVideos.sumOf { it.fileSize } }
@@ -136,65 +140,47 @@ fun FilesScreen(
             .fillMaxSize()
             .testTag("files_screen")
     ) {
-        TopAppBar(
-            title = {
-                Text(
-                    text = "Offline Files",
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
-                )
-            },
+        CassetteTopBar(
+            title = "Offline Files",
+            subtitle = "Local Audio, Videos & Tape Folders",
             actions = {
                 FilledTonalButton(
                     onClick = { filePickerLauncher.launch(arrayOf("audio/*", "video/*")) },
-                    modifier = Modifier.padding(end = 8.dp)
+                    modifier = Modifier.padding(end = 4.dp)
                 ) {
                     Icon(Icons.Rounded.FileOpen, contentDescription = "Import", modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Import File")
+                    Text("Import")
                 }
             }
         )
 
         // Storage Usage Summary Card
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            shape = RoundedCornerShape(20.dp)
+        CassetteSectionCard(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            highlighted = false
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "LOCAL STORAGE USAGE",
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                    color = MaterialTheme.colorScheme.primary
+            Column(modifier = Modifier.padding(14.dp)) {
+                CassetteSectionHeader(
+                    title = "Local Storage Usage",
+                    badgeText = "100% OFFLINE"
                 )
                 Spacer(Modifier.height(8.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
                         Text(
                             text = formatBytes(totalAudioBytes + totalVideoBytes),
-                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Black),
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "${allTracks.size} Audio Tracks • ${allVideos.size} Videos • ${mediaFolders.size} Folders",
+                            text = "${allTracks.size} Audio Cassettes • ${allVideos.size} Videos • ${mediaFolders.size} Folders",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer
-                    ) {
-                        Text(
-                            text = "100% Offline",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }
                 }
@@ -345,6 +331,12 @@ fun FilesScreen(
                     ) {
                         items(allTracks, key = { it.id }) { track ->
                             val isSelected = track.id in selectedAudioIds
+                            val isPlayingThis = currentPlayingTrack?.id == track.id
+                            val activeSpin = isPlayingThis && isAudioPlaying && isAppResumed
+                            val reelAngle by rememberVisibleCassetteReelAngle(
+                                isActivelyPlayingAndVisible = activeSpin,
+                                seedAngleDegrees = ((track.id * 29L) % 360L).toFloat()
+                            )
                             val identifier = track.path.ifBlank { track.id.toString() }
                             val blEntry = blacklistEntries.find {
                                 it.type.equals("SONG", true) && (it.identifier.equals(identifier, true) || it.identifier.equals(track.title, true))
@@ -371,11 +363,19 @@ fun FilesScreen(
                                             selectedAudioIds = selectedAudioIds + track.id
                                         }
                                     ),
-                                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-                                else MaterialTheme.colorScheme.surfaceVariant
+                                shape = RoundedCornerShape(14.dp),
+                                color = when {
+                                    isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                                    isPlayingThis -> MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                                    else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                                },
+                                border = BorderStroke(
+                                    width = if (isPlayingThis || isSelected) 1.2.dp else 0.8.dp,
+                                    color = if (isPlayingThis || isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                )
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     if (isSelectionMode) {
@@ -386,28 +386,24 @@ fun FilesScreen(
                                             }
                                         )
                                     } else {
-                                        Surface(
-                                            shape = RoundedCornerShape(8.dp),
-                                            color = MaterialTheme.colorScheme.primaryContainer
-                                        ) {
-                                            Text(
-                                                text = track.mimeType.substringAfterLast("/").uppercase().take(4),
-                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                                color = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
-                                            )
-                                        }
+                                        MiniCassetteArtwork(
+                                            track = track,
+                                            isPlaying = activeSpin,
+                                            reelAngleDegrees = reelAngle,
+                                            modifier = Modifier.height(38.dp)
+                                        )
                                     }
                                     Spacer(Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             text = track.title,
                                             style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                                            color = if (isPlayingThis) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
                                         Text(
-                                            text = "${formatBytes(track.fileSize)} • ${track.path.ifBlank { "Local Storage" }}",
+                                            text = "${track.mimeType.substringAfterLast("/").uppercase().take(4)} • ${formatBytes(track.fileSize)} • ${track.path.ifBlank { "Local Storage" }}",
                                             style = MaterialTheme.typography.labelSmall,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
@@ -540,51 +536,68 @@ fun FilesScreen(
                                             selectedVideoIds = selectedVideoIds + video.id
                                         }
                                     ),
-                                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-                                else MaterialTheme.colorScheme.surfaceVariant
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (isSelected) {
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+                                },
+                                border = BorderStroke(
+                                    width = if (isSelected) 1.2.dp else 0.8.dp,
+                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                )
                             ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    if (isSelectionMode) {
-                                        Checkbox(
-                                            checked = isSelected,
-                                            onCheckedChange = {
-                                                selectedVideoIds = if (it) selectedVideoIds + video.id else selectedVideoIds - video.id
-                                            }
-                                        )
-                                    } else {
-                                        Surface(
-                                            shape = RoundedCornerShape(8.dp),
-                                            color = MaterialTheme.colorScheme.secondaryContainer
-                                        ) {
-                                            Icon(
-                                                Icons.Rounded.PlayCircle,
-                                                contentDescription = "Video",
-                                                tint = MaterialTheme.colorScheme.secondary,
-                                                modifier = Modifier.padding(8.dp).size(24.dp)
+                                Column {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        if (isSelectionMode) {
+                                            Checkbox(
+                                                checked = isSelected,
+                                                onCheckedChange = {
+                                                    selectedVideoIds = if (it) selectedVideoIds + video.id else selectedVideoIds - video.id
+                                                }
+                                            )
+                                        } else {
+                                            VideoRetroThumbCard(
+                                                video = video,
+                                                modifier = Modifier.size(width = 64.dp, height = 42.dp)
                                             )
                                         }
-                                    }
-                                    Spacer(Modifier.width(12.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = video.title,
-                                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = "${video.resolution} • ${formatBytes(video.fileSize)}",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    Box {
-                                        IconButton(onClick = { showMenu = true }) {
-                                            Icon(Icons.Rounded.MoreVert, contentDescription = "Video Options")
+                                        Spacer(Modifier.width(12.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = video.title,
+                                                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = "${video.resolution} • ${formatBytes(video.fileSize)}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
                                         }
+                                        IconButton(
+                                            onClick = {
+                                                coroutineScope.launch {
+                                                    repository.setVideoWatchLater(video.id, !video.inWatchLater)
+                                                }
+                                            },
+                                            modifier = Modifier.minimumInteractiveComponentSize()
+                                        ) {
+                                            Icon(
+                                                imageVector = if (video.inWatchLater) Icons.Rounded.WatchLater else Icons.Rounded.Schedule,
+                                                contentDescription = "Watch Later",
+                                                tint = if (video.inWatchLater) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                        Box {
+                                            IconButton(onClick = { showMenu = true }) {
+                                                Icon(Icons.Rounded.MoreVert, contentDescription = "Video Options")
+                                            }
                                         DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                                             if (blEntry != null) {
                                                 DropdownMenuItem(
@@ -643,6 +656,17 @@ fun FilesScreen(
                                         }
                                     }
                                 }
+                                    if (video.durationMs > 0 && video.watchProgressMs > 0) {
+                                        LinearProgressIndicator(
+                                            progress = { (video.watchProgressMs.toFloat() / video.durationMs).coerceIn(0f, 1f) },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(2.5.dp),
+                                            color = MaterialTheme.colorScheme.primary,
+                                            trackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -693,13 +717,9 @@ fun FilesScreen(
                         val isSelected = folder.canonicalKey in selectedFolderKeys
                         var showMenu by remember { mutableStateOf(false) }
 
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-                            else MaterialTheme.colorScheme.surfaceVariant,
+                        Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
                                 .combinedClickable(
                                     onClick = {
                                         if (isSelectionMode) {
@@ -712,54 +732,33 @@ fun FilesScreen(
                                     }
                                 )
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (isSelectionMode) {
-                                    Checkbox(
-                                        checked = isSelected,
-                                        onCheckedChange = {
-                                            selectedFolderKeys = if (it) selectedFolderKeys + folder.canonicalKey else selectedFolderKeys - folder.canonicalKey
-                                        }
-                                    )
-                                } else {
-                                    Icon(
-                                        imageVector = if (folder.isBlacklisted) Icons.Rounded.FolderOff else Icons.Rounded.Folder,
-                                        contentDescription = null,
-                                        tint = if (folder.isBlacklisted) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(28.dp)
-                                    )
-                                }
-                                Spacer(Modifier.width(12.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = folder.displayName,
-                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = folder.displayPath,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = buildString {
-                                            append("${folder.audioCount} audio • ${folder.videoCount} videos")
-                                            if (folder.isBlacklisted) append(" • BLACKLISTED")
-                                            else if (folder.isWhitelisted) append(" • WHITELISTED")
-                                        },
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = if (folder.isBlacklisted) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                                Box {
-                                    IconButton(onClick = { showMenu = true }) {
-                                        Icon(Icons.Rounded.MoreVert, contentDescription = "Folder Options")
+                            CassetteFolderBoxCard(
+                                folderName = folder.displayName,
+                                folderPath = folder.displayPath,
+                                itemCountLabel = buildString {
+                                    append("${folder.audioCount}A • ${folder.videoCount}V")
+                                    if (folder.isBlacklisted) append(" • BL")
+                                    else if (folder.isWhitelisted) append(" • WL")
+                                },
+                                isSelected = isSelected,
+                                onClick = {
+                                    if (isSelectionMode) {
+                                        selectedFolderKeys = if (isSelected) selectedFolderKeys - folder.canonicalKey else selectedFolderKeys + folder.canonicalKey
                                     }
+                                },
+                                trailingActions = {
+                                    if (isSelectionMode) {
+                                        Checkbox(
+                                            checked = isSelected,
+                                            onCheckedChange = {
+                                                selectedFolderKeys = if (it) selectedFolderKeys + folder.canonicalKey else selectedFolderKeys - folder.canonicalKey
+                                            }
+                                        )
+                                    }
+                                    Box {
+                                        IconButton(onClick = { showMenu = true }) {
+                                            Icon(Icons.Rounded.MoreVert, contentDescription = "Folder Options")
+                                        }
                                     DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                                         if (folder.isBlacklisted) {
                                             DropdownMenuItem(
@@ -826,6 +825,7 @@ fun FilesScreen(
                                     }
                                 }
                             }
+                            )
                         }
                     }
                 }

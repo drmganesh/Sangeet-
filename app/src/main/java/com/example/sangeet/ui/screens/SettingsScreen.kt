@@ -1,10 +1,13 @@
 package com.example.sangeet.ui.screens
 
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.sangeet.data.model.CassetteStyle
@@ -31,6 +35,11 @@ import com.example.sangeet.data.repository.SettingsRepository
 import com.example.sangeet.playback.PlaybackManager
 import com.example.sangeet.ui.components.ArtworkAnimationPreferencesSnapshot
 import com.example.sangeet.ui.components.ArtworkPathCache
+import com.example.sangeet.ui.components.CassetteArtwork
+import com.example.sangeet.ui.components.CassetteHeaderBadge
+import com.example.sangeet.ui.components.CassetteSectionCard
+import com.example.sangeet.ui.components.CassetteSectionHeader
+import com.example.sangeet.ui.components.CassetteTopBar
 import com.example.ui.theme.AccentColor
 import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.launch
@@ -79,176 +88,248 @@ fun SettingsScreen(
     var showCassetteStyleDialog by remember { mutableStateOf(false) }
     var showResetSettingsDialog by remember { mutableStateOf(false) }
 
-    LazyColumn(
+    Column(
         modifier = modifier
             .fillMaxSize()
-            .testTag("settings_screen"),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 120.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp)
+            .testTag("settings_screen")
     ) {
-        item {
-            Text(
-                text = "Settings",
-                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                color = MaterialTheme.colorScheme.onSurface
-            )
-        }
+        CassetteTopBar(
+            title = "Settings",
+            subtitle = "Offline cassette deck, audio DSP & appearance",
+            badgeText = currentCassetteStyle.badgeText
+        )
 
-        // Section: 100% Offline Guarantee Banner
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)),
-                shape = RoundedCornerShape(20.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Rounded.Security,
-                        contentDescription = "Offline",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(36.dp)
-                    )
-                    Spacer(Modifier.width(16.dp))
-                    Column {
-                        Text(
-                            text = "Absolute Offline Security",
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSurface
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 120.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp)
+        ) {
+            // Section: 100% Offline Guarantee Banner
+            item {
+                CassetteSectionCard(highlighted = true) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Rounded.Security,
+                            contentDescription = "Offline",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(34.dp)
                         )
-                        Text(
-                            text = "Zero internet permission. Zero cloud tracking. All media, playlists, audio DSP, and equalizer settings stay strictly on your device.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-
-        // Section: Listening Statistics
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(20.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "LISTENING STATISTICS",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceAround
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = "$totalPlayed",
-                                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = "Songs Played",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        val hours = (totalTimeMs ?: 0L) / 3600000L
-                        val mins = ((totalTimeMs ?: 0L) % 3600000L) / 60000L
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = "${hours}h ${mins}m",
-                                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = "Listening Time",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // Section: Appearance & Themes
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(20.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Text(
-                        text = "APPEARANCE & THEME (PERSISTED)",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                        color = MaterialTheme.colorScheme.primary
-                    )
-
-                    // Theme selector chips
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        ThemeMode.entries.forEach { mode ->
-                            FilterChip(
-                                selected = currentThemeMode == mode,
-                                onClick = { onThemeModeChanged(mode) },
-                                label = { Text(mode.name.lowercase().replaceFirstChar { it.uppercase() }) },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-
-                    // Accent Color selector
-                    Text(text = "Accent Palette", style = MaterialTheme.typography.bodyMedium)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceAround
-                    ) {
-                        AccentColor.entries.forEach { accent ->
-                            val isSelected = currentAccentColor == accent
-                            Box(
-                                modifier = Modifier
-                                    .size(42.dp)
-                                    .clip(CircleShape)
-                                    .background(accent.color)
-                                    .clickable { onAccentColorChanged(accent) },
-                                contentAlignment = Alignment.Center
+                        Spacer(Modifier.width(14.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                if (isSelected) {
-                                    Icon(
-                                        Icons.Rounded.Check,
-                                        contentDescription = null,
-                                        tint = Color.Black,
-                                        modifier = Modifier.size(24.dp)
-                                    )
+                                Text(
+                                    text = "Absolute Offline Security",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                CassetteHeaderBadge(text = "100% LOCAL")
+                            }
+                            Text(
+                                text = "Zero internet permission. Zero cloud tracking. All media, playlists, cassette skins, DSP, and equalizer settings stay strictly on your device.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Section: Listening Statistics
+            item {
+                CassetteSectionCard {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        CassetteSectionHeader(
+                            title = "Listening Statistics",
+                            badgeText = "DECK LOG"
+                        )
+                        Spacer(Modifier.height(14.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceAround
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = "$totalPlayed",
+                                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = "Songs Played",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            val hours = (totalTimeMs ?: 0L) / 3600000L
+                            val mins = ((totalTimeMs ?: 0L) % 3600000L) / 60000L
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = "${hours}h ${mins}m",
+                                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = "Listening Time",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Section: Cassette Style & Theme Appearance
+            item {
+                CassetteSectionCard {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        CassetteSectionHeader(
+                            title = "Cassette & Theme Appearance",
+                            subtitle = "Applied live across Home, Library, Search, Queue & Walkman",
+                            badgeText = currentCassetteStyle.displayName.uppercase()
+                        )
+
+                        // Visual 5-Option Cassette Style Selector
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            items(CassetteStyle.entries) { style ->
+                                val isSelected = currentCassetteStyle == style
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = if (isSelected) {
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                                    } else {
+                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.65f)
+                                    },
+                                    border = BorderStroke(
+                                        width = if (isSelected) 1.6.dp else 0.9.dp,
+                                        color = if (isSelected) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+                                        }
+                                    ),
+                                    modifier = Modifier
+                                        .width(136.dp)
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .clickable { playbackManager.setCassetteStyle(style) }
+                                        .testTag("cassette_theme_card_${style.name.lowercase()}")
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(10.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        CassetteArtwork(
+                                            track = null,
+                                            isPlaying = isSelected,
+                                            showMetadataOnLabel = false,
+                                            compact = true,
+                                            cassetteStyle = style,
+                                            crossfadeDurationMs = 0,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .aspectRatio(1.56f)
+                                        )
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.Center
+                                        ) {
+                                            if (isSelected) {
+                                                Icon(
+                                                    Icons.Rounded.CheckCircle,
+                                                    contentDescription = "Selected",
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                                Spacer(Modifier.width(4.dp))
+                                            }
+                                            Text(
+                                                text = style.displayName,
+                                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+
+                        // Theme selector chips
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            ThemeMode.entries.forEach { mode ->
+                                FilterChip(
+                                    selected = currentThemeMode == mode,
+                                    onClick = { onThemeModeChanged(mode) },
+                                    label = { Text(mode.name.lowercase().replaceFirstChar { it.uppercase() }) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+
+                        // Accent Color selector
+                        Text(text = "Accent Palette", style = MaterialTheme.typography.bodyMedium)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceAround
+                        ) {
+                            AccentColor.entries.forEach { accent ->
+                                val isSelected = currentAccentColor == accent
+                                Box(
+                                    modifier = Modifier
+                                        .size(42.dp)
+                                        .clip(CircleShape)
+                                        .background(accent.color)
+                                        .border(
+                                            width = if (isSelected) 2.dp else 0.dp,
+                                            color = if (isSelected) Color.White else Color.Transparent,
+                                            shape = CircleShape
+                                        )
+                                        .clickable { onAccentColorChanged(accent) },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isSelected) {
+                                        Icon(
+                                            Icons.Rounded.Check,
+                                            contentDescription = accent.displayName,
+                                            tint = Color.Black,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
 
         // Section: Home and Navigation Settings
         item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(20.dp)
-            ) {
+            CassetteSectionCard {
                 Column(modifier = Modifier.padding(8.dp)) {
+                    CassetteSectionHeader(
+                        title = "Home, Notifications & Motion",
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+                    )
                     ListItem(
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         headlineContent = { Text("Home and Navigation") },
                         supportingContent = { Text("Start screen & mode, Spotlight layout, navigation bar, and rotation") },
                         leadingContent = {
@@ -320,13 +401,15 @@ fun SettingsScreen(
 
         // Section: Audio DSP Controls
         item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(20.dp)
-            ) {
+            CassetteSectionCard {
                 Column(modifier = Modifier.padding(8.dp)) {
+                    CassetteSectionHeader(
+                        title = "Audio DSP Engine",
+                        badgeText = "BIQUAD",
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+                    )
                     ListItem(
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         headlineContent = { Text("15-Band Graphic Equalizer") },
                         supportingContent = { Text("Independent sliders, preamp, and bass boost (auto-saved)") },
                         leadingContent = {
@@ -355,16 +438,10 @@ fun SettingsScreen(
 
         // Section: Media Filtering (Blacklist & Whitelist)
         item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(20.dp)
-            ) {
+            CassetteSectionCard {
                 Column(modifier = Modifier.padding(8.dp)) {
-                    Text(
-                        text = "MEDIA FILTERING & RULES",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                        color = MaterialTheme.colorScheme.primary,
+                    CassetteSectionHeader(
+                        title = "Media Filtering & Rules",
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
                     )
                     val blFolderRules = folderRules.filter { it.listKind == RuleListKind.BLACKLIST }
@@ -417,20 +494,12 @@ fun SettingsScreen(
 
         // Section: Album Artwork & Lyrics Customization
         item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(20.dp)
-            ) {
+            CassetteSectionCard {
                 Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Text(
-                        text = "ALBUM ARTWORK & LYRICS",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    CassetteSectionHeader(title = "Album Artwork & Lyrics")
 
                     // Lyrics Font Size
                     Column {
@@ -499,13 +568,14 @@ fun SettingsScreen(
 
         // Section: Walkman Cassette Player & Sleep Timer
         item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(20.dp)
-            ) {
+            CassetteSectionCard {
                 Column(modifier = Modifier.padding(8.dp)) {
+                    CassetteSectionHeader(
+                        title = "Walkman Deck & Timer",
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+                    )
                     ListItem(
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         headlineContent = { Text("Cassette Design") },
                         supportingContent = { Text("${currentCassetteStyle.displayName} • ${currentCassetteStyle.badgeText}") },
                         leadingContent = {
@@ -559,13 +629,14 @@ fun SettingsScreen(
 
         // Section: Library Maintenance & Backup
         item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(20.dp)
-            ) {
+            CassetteSectionCard {
                 Column(modifier = Modifier.padding(8.dp)) {
+                    CassetteSectionHeader(
+                        title = "Library Maintenance & Backup",
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+                    )
                     ListItem(
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         headlineContent = { Text("Rescan Device Media") },
                         supportingContent = { Text("Re-index all audio and video files from storage") },
                         leadingContent = {
@@ -627,6 +698,7 @@ fun SettingsScreen(
                 }
             }
         }
+    }
     }
 
     // Cassette Design Customization Dialog
@@ -729,7 +801,7 @@ fun SettingsScreen(
             onDismissRequest = { showResetSettingsDialog = false },
             title = { Text("Reset All Settings to Defaults?") },
             text = {
-                Text("This will restore default AMOLED theme, Cyan accent, Flat 15-band equalizer, Natural stereo spatial audio, and Classic Black cassette appearance. Your media files and playlists will NOT be deleted.")
+                Text("This will restore default AMOLED theme, Golden-Yellow accent, Flat 15-band equalizer, Natural stereo spatial audio, and Black and Gold cassette appearance. Your media files and playlists will NOT be deleted.")
             },
             confirmButton = {
                 TextButton(
@@ -737,8 +809,8 @@ fun SettingsScreen(
                         coroutineScope.launch {
                             settingsRepo.resetAllSettingsToDefault()
                             onThemeModeChanged(ThemeMode.AMOLED)
-                            onAccentColorChanged(AccentColor.CYAN)
-                            playbackManager.setCassetteStyle(CassetteStyle.CLASSIC_BLACK)
+                            onAccentColorChanged(AccentColor.GOLD)
+                            playbackManager.setCassetteStyle(CassetteStyle.BLACK_AND_GOLD)
                             playbackManager.setWalkmanMechanicalSounds(false)
                             playbackManager.setEqAllBands(FloatArray(15) { 0f })
                             playbackManager.setEqBassBoost(0f)

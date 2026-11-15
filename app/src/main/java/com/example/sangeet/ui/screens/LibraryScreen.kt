@@ -4,20 +4,28 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,11 +33,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.LibraryRouteRequest
 import com.example.sangeet.data.model.*
 import com.example.sangeet.data.repository.MediaFolderSummary
 import com.example.sangeet.data.repository.MediaRepository
@@ -38,9 +50,13 @@ import com.example.sangeet.data.rules.StoragePathHelper
 import com.example.sangeet.playback.PlaybackManager
 import com.example.sangeet.scanner.FolderInspectionResult
 import com.example.sangeet.ui.components.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 
 enum class LibraryTab(val title: String) {
     SONGS("Songs"),
@@ -72,6 +88,8 @@ private sealed class LibrarySubFilter(val title: String) {
 fun LibraryScreen(
     playbackManager: PlaybackManager,
     repository: MediaRepository,
+    routeRequest: LibraryRouteRequest = LibraryRouteRequest.None,
+    onRouteRequestConsumed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -91,8 +109,34 @@ fun LibraryScreen(
     val blacklistEntries by repository.blacklist.collectAsState(initial = emptyList())
     val whitelistEntries by repository.whitelist.collectAsState(initial = emptyList())
 
+    val currentPlayingTrack by playbackManager.currentTrack.collectAsState()
+    val isAudioPlaying by playbackManager.isPlaying.collectAsState()
+    val isAppResumed by rememberIsAppResumed()
+
     // Reactive Sub-view filter (Album / Artist / Genre / Playlist / Folder)
     var activeSubFilter by remember { mutableStateOf<LibrarySubFilter?>(null) }
+
+    LaunchedEffect(routeRequest) {
+        when (routeRequest) {
+            is LibraryRouteRequest.OpenAlbum -> {
+                selectedTab = LibraryTab.ALBUMS
+                activeSubFilter = LibrarySubFilter.Album(routeRequest.albumName)
+                onRouteRequestConsumed()
+            }
+            is LibraryRouteRequest.OpenArtist -> {
+                selectedTab = LibraryTab.ARTISTS
+                activeSubFilter = LibrarySubFilter.Artist(routeRequest.artistName)
+                onRouteRequestConsumed()
+            }
+            is LibraryRouteRequest.OpenPlaylist -> {
+                selectedTab = LibraryTab.PLAYLISTS
+                activeSubFilter = LibrarySubFilter.PlaylistFilter(routeRequest.playlistId, routeRequest.playlistName)
+                onRouteRequestConsumed()
+            }
+            LibraryRouteRequest.None -> Unit
+        }
+    }
+
     val activeFilterTracks by remember(activeSubFilter) {
         when (val f = activeSubFilter) {
             is LibrarySubFilter.Album -> repository.getTracksByAlbum(f.title)
@@ -117,11 +161,38 @@ fun LibraryScreen(
     var selectedTrackIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var selectedFolderKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
 
-    // Playlist & Rule dialogs
+    // Playlist dialogs
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
-    var trackToAddToPlaylist by remember { mutableStateOf<AudioTrack?>(null) }
+    var playlistToRename by remember { mutableStateOf<Playlist?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var playlistIdForCover by remember { mutableStateOf<Long?>(null) }
+    var tracksToAddToPlaylist by remember { mutableStateOf<List<AudioTrack>?>(null) }
     var pendingConflict by remember { mutableStateOf<Pair<QuickRuleProposal, List<RuleConflict>>?>(null) }
+
+    // Photo Picker for custom playlist cover (zero broad storage permissions)
+    val coverPhotoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        val plId = playlistIdForCover
+        playlistIdForCover = null
+        if (uri != null && plId != null) {
+            coroutineScope.launch {
+                val savedPath = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val dir = File(context.filesDir, "playlist_covers").apply { mkdirs() }
+                        val outFile = File(dir, "pl_$plId.jpg")
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            FileOutputStream(outFile).use { output -> input.copyTo(output) }
+                        }
+                        if (outFile.exists() && outFile.length() > 0L) outFile.absolutePath else uri.toString()
+                    }.getOrDefault(uri.toString())
+                }
+                repository.updatePlaylistArtwork(plId, savedPath)
+                Toast.makeText(context, "Playlist cover updated", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     // SAF Direct Folder Picker state for Folders tab
     var pickerListKind by remember { mutableStateOf(RuleListKind.BLACKLIST) }
@@ -172,6 +243,16 @@ fun LibraryScreen(
         }
     }
 
+    val tracksByAlbum = remember(allTracks) {
+        allTracks.groupBy { it.album.trim().lowercase() }
+    }
+    val tracksByArtist = remember(allTracks) {
+        allTracks.groupBy { it.artist.trim().lowercase() }
+    }
+    val tracksByGenre = remember(allTracks) {
+        allTracks.groupBy { it.genre.trim().lowercase() }
+    }
+
     val proposeRule: (QuickRuleProposal) -> Unit = { proposal ->
         coroutineScope.launch {
             executeQuickRuleWithConflictCheck(
@@ -202,36 +283,45 @@ fun LibraryScreen(
         }
     }
 
+    val activePlaylistObj = (activeSubFilter as? LibrarySubFilter.PlaylistFilter)?.let { pf ->
+        playlists.find { it.id == pf.id }
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
             .testTag("library_screen")
     ) {
-        TopAppBar(
-            title = {
-                Text(
-                    text = activeSubFilter?.title ?: "Music Library",
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+        CassetteTopBar(
+            title = activePlaylistObj?.name ?: activeSubFilter?.title ?: "Music Library",
+            subtitle = when (val f = activeSubFilter) {
+                is LibrarySubFilter.Album -> "${activeFilterTracks.size} tracks • Album Deck"
+                is LibrarySubFilter.Artist -> "${activeFilterTracks.size} tracks • Artist Discography"
+                is LibrarySubFilter.PlaylistFilter -> "${activeFilterTracks.size} tracks • Tape Collection"
+                is LibrarySubFilter.Genre -> "${activeFilterTracks.size} tracks • Genre Channel"
+                is LibrarySubFilter.FolderFilter -> f.summary.displayPath
+                null -> "${allTracks.size} Cassettes • ${allAlbums.size} Albums"
             },
-            navigationIcon = if (activeSubFilter != null) {
+            badgeText = if (activeSubFilter == null) "SANGEET" else null,
+            onNavigateBack = if (activeSubFilter != null) {
                 {
-                    IconButton(onClick = {
-                        activeSubFilter = null
-                        isSelectionMode = false
-                        selectedTrackIds = emptySet()
-                    }) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
-                    }
+                    activeSubFilter = null
+                    isSelectionMode = false
+                    selectedTrackIds = emptySet()
                 }
-            } else { {} },
+            } else null,
             actions = {
                 if (selectedTab == LibraryTab.SONGS && activeSubFilter == null) {
                     Box {
-                        IconButton(onClick = { showSortMenu = true }) {
-                            Icon(Icons.Rounded.Sort, contentDescription = "Sort")
+                        IconButton(
+                            onClick = { showSortMenu = true },
+                            modifier = Modifier.minimumInteractiveComponentSize()
+                        ) {
+                            Icon(
+                                Icons.Rounded.Sort,
+                                contentDescription = "Sort Tracks",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
                         }
                         DropdownMenu(expanded = showSortMenu, onDismissRequest = { showSortMenu = false }) {
                             SortOrder.entries.forEach { sort ->
@@ -247,8 +337,17 @@ fun LibraryScreen(
                     }
                 }
                 if (selectedTab == LibraryTab.PLAYLISTS && activeSubFilter == null) {
-                    IconButton(onClick = { showCreatePlaylistDialog = true }) {
-                        Icon(Icons.Rounded.PlaylistAdd, contentDescription = "New Playlist")
+                    IconButton(
+                        onClick = { showCreatePlaylistDialog = true },
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("library_create_playlist_btn")
+                    ) {
+                        Icon(
+                            Icons.Rounded.PlaylistAdd,
+                            contentDescription = "New Playlist",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
             }
@@ -258,7 +357,11 @@ fun LibraryScreen(
             ScrollableTabRow(
                 selectedTabIndex = selectedTab.ordinal,
                 edgePadding = 16.dp,
-                divider = {}
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.primary,
+                divider = {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
+                }
             ) {
                 LibraryTab.entries.forEach { tab ->
                     Tab(
@@ -272,7 +375,12 @@ fun LibraryScreen(
                         text = {
                             Text(
                                 text = tab.title,
-                                fontWeight = if (selectedTab == tab) FontWeight.Bold else FontWeight.Normal
+                                fontWeight = if (selectedTab == tab) FontWeight.Bold else FontWeight.Normal,
+                                color = if (selectedTab == tab) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
                             )
                         },
                         modifier = Modifier.testTag("library_tab_${tab.name.lowercase()}")
@@ -361,9 +469,13 @@ fun LibraryScreen(
                 .fillMaxSize()
                 .padding(horizontal = 16.dp)
         ) {
-            if (activeSubFilter != null) {
+            val subFilter = activeSubFilter
+            if (subFilter != null) {
+                val isPlaylistSub = subFilter is LibrarySubFilter.PlaylistFilter
                 TrackList(
                     tracks = activeFilterTracks,
+                    currentTrackId = currentPlayingTrack?.id,
+                    isAudioPlaying = isAudioPlaying && isAppResumed,
                     blacklistEntries = blacklistEntries,
                     whitelistEntries = whitelistEntries,
                     isSelectionMode = isSelectionMode,
@@ -378,17 +490,148 @@ fun LibraryScreen(
                     onPlay = { playbackManager.playTrack(it, activeFilterTracks) },
                     onAddToQueue = { playbackManager.addToQueue(it) },
                     onPlayNext = { playbackManager.playNextInQueue(it) },
-                    onAddToPlaylist = { trackToAddToPlaylist = it },
+                    onAddToPlaylist = { tracksToAddToPlaylist = listOf(it) },
                     onToggleFavorite = { t -> coroutineScope.launch { repository.setTrackFavorite(t.id, !t.isFavorite) } },
+                    onViewAlbum = { album -> if (album.isNotBlank()) activeSubFilter = LibrarySubFilter.Album(album) },
+                    onViewArtist = { artist -> if (artist.isNotBlank()) activeSubFilter = LibrarySubFilter.Artist(artist) },
                     onProposeRule = proposeRule,
                     onRemoveBlacklistId = { id -> coroutineScope.launch { repository.removeFromBlacklist(id) } },
-                    onRemoveWhitelistId = { id -> coroutineScope.launch { repository.removeFromWhitelist(id) } }
+                    onRemoveWhitelistId = { id -> coroutineScope.launch { repository.removeFromWhitelist(id) } },
+                    isPlaylistReorderMode = isPlaylistSub,
+                    onMoveTrackInPlaylist = if (isPlaylistSub) {
+                        { idx, delta ->
+                            val targetIdx = idx + delta
+                            if (idx in activeFilterTracks.indices && targetIdx in activeFilterTracks.indices) {
+                                val reordered = activeFilterTracks.toMutableList()
+                                val moved = reordered.removeAt(idx)
+                                reordered.add(targetIdx, moved)
+                                coroutineScope.launch {
+                                    repository.reorderPlaylistTracks(subFilter.id, reordered.map { it.id })
+                                }
+                            }
+                        }
+                    } else null,
+                    onRemoveTrackFromPlaylist = if (isPlaylistSub) {
+                        { track ->
+                            coroutineScope.launch {
+                                repository.removeTrackFromPlaylist(subFilter.id, track.id)
+                            }
+                        }
+                    } else null,
+                    headerContent = {
+                        when (subFilter) {
+                            is LibrarySubFilter.Album -> {
+                                val rep = activeFilterTracks.firstOrNull { it.artworkUri.isNotBlank() }
+                                    ?: activeFilterTracks.firstOrNull()
+                                if (rep != null) {
+                                    AlbumDetailHeader(
+                                        albumName = subFilter.title,
+                                        artistName = rep.artist,
+                                        trackCount = activeFilterTracks.size,
+                                        representativeTrack = rep,
+                                        isPlaying = currentPlayingTrack?.album?.equals(subFilter.title, ignoreCase = true) == true && isAudioPlaying && isAppResumed,
+                                        onPlayAll = {
+                                            if (activeFilterTracks.isNotEmpty()) {
+                                                playbackManager.playTrack(activeFilterTracks.first(), activeFilterTracks)
+                                            }
+                                        },
+                                        onShuffle = {
+                                            if (activeFilterTracks.isNotEmpty()) {
+                                                val shuffled = activeFilterTracks.shuffled()
+                                                playbackManager.playTrack(shuffled.first(), shuffled)
+                                            }
+                                        },
+                                        onAddToPlaylist = {
+                                            if (activeFilterTracks.isNotEmpty()) {
+                                                tracksToAddToPlaylist = activeFilterTracks
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                            is LibrarySubFilter.Artist -> {
+                                val rep = activeFilterTracks.firstOrNull { it.artworkUri.isNotBlank() }
+                                    ?: activeFilterTracks.firstOrNull()
+                                val artistAlbums = remember(activeFilterTracks) {
+                                    activeFilterTracks.groupBy { it.album.trim().lowercase() }.values.mapNotNull { list ->
+                                        list.firstOrNull { it.artworkUri.isNotBlank() } ?: list.firstOrNull()
+                                    }
+                                }
+                                ArtistDetailHeader(
+                                    artistName = subFilter.title,
+                                    representativeTrack = rep,
+                                    albumTracks = artistAlbums,
+                                    totalTracks = activeFilterTracks.size,
+                                    currentTrack = currentPlayingTrack,
+                                    isAudioPlaying = isAudioPlaying && isAppResumed,
+                                    onPlayAll = {
+                                        if (activeFilterTracks.isNotEmpty()) {
+                                            playbackManager.playTrack(activeFilterTracks.first(), activeFilterTracks)
+                                        }
+                                    },
+                                    onShuffle = {
+                                        if (activeFilterTracks.isNotEmpty()) {
+                                            val shuffled = activeFilterTracks.shuffled()
+                                            playbackManager.playTrack(shuffled.first(), shuffled)
+                                        }
+                                    },
+                                    onOpenAlbum = { albumName ->
+                                        activeSubFilter = LibrarySubFilter.Album(albumName)
+                                    }
+                                )
+                            }
+                            is LibrarySubFilter.PlaylistFilter -> {
+                                val pl = activePlaylistObj
+                                val firstWithArt = activeFilterTracks.firstOrNull { it.artworkUri.isNotBlank() }
+                                    ?: activeFilterTracks.firstOrNull()
+                                val coverTrack = AudioTrack(
+                                    id = -subFilter.id - 2000L,
+                                    title = pl?.name ?: subFilter.title,
+                                    artist = "Playlist",
+                                    album = "${activeFilterTracks.size} tracks",
+                                    path = firstWithArt?.path.orEmpty(),
+                                    artworkUri = pl?.customArtworkUri?.takeIf { it.isNotBlank() } ?: firstWithArt?.artworkUri.orEmpty()
+                                )
+                                PlaylistDetailHeader(
+                                    playlistName = pl?.name ?: subFilter.title,
+                                    coverTrack = coverTrack,
+                                    trackCount = activeFilterTracks.size,
+                                    onPlayAll = {
+                                        if (activeFilterTracks.isNotEmpty()) {
+                                            playbackManager.playTrack(activeFilterTracks.first(), activeFilterTracks)
+                                        }
+                                    },
+                                    onShuffle = {
+                                        if (activeFilterTracks.isNotEmpty()) {
+                                            val shuffled = activeFilterTracks.shuffled()
+                                            playbackManager.playTrack(shuffled.first(), shuffled)
+                                        }
+                                    },
+                                    onRename = {
+                                        if (pl != null) {
+                                            playlistToRename = pl
+                                            renameText = pl.name
+                                        }
+                                    },
+                                    onPickCover = {
+                                        playlistIdForCover = subFilter.id
+                                        coverPhotoPicker.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                        )
+                                    }
+                                )
+                            }
+                            else -> Unit
+                        }
+                    }
                 )
             } else {
                 when (selectedTab) {
                     LibraryTab.SONGS -> {
                         TrackList(
                             tracks = sortedTracks,
+                            currentTrackId = currentPlayingTrack?.id,
+                            isAudioPlaying = isAudioPlaying && isAppResumed,
                             blacklistEntries = blacklistEntries,
                             whitelistEntries = whitelistEntries,
                             isSelectionMode = isSelectionMode,
@@ -403,8 +646,10 @@ fun LibraryScreen(
                             onPlay = { playbackManager.playTrack(it, sortedTracks) },
                             onAddToQueue = { playbackManager.addToQueue(it) },
                             onPlayNext = { playbackManager.playNextInQueue(it) },
-                            onAddToPlaylist = { trackToAddToPlaylist = it },
+                            onAddToPlaylist = { tracksToAddToPlaylist = listOf(it) },
                             onToggleFavorite = { t -> coroutineScope.launch { repository.setTrackFavorite(t.id, !t.isFavorite) } },
+                            onViewAlbum = { album -> if (album.isNotBlank()) activeSubFilter = LibrarySubFilter.Album(album) },
+                            onViewArtist = { artist -> if (artist.isNotBlank()) activeSubFilter = LibrarySubFilter.Artist(artist) },
                             onProposeRule = proposeRule,
                             onRemoveBlacklistId = { id -> coroutineScope.launch { repository.removeFromBlacklist(id) } },
                             onRemoveWhitelistId = { id -> coroutineScope.launch { repository.removeFromWhitelist(id) } }
@@ -412,44 +657,135 @@ fun LibraryScreen(
                     }
 
                     LibraryTab.ALBUMS -> {
-                        LazyVerticalGrid(
-                            columns = GridCells.Fixed(2),
-                            contentPadding = PaddingValues(top = 16.dp, bottom = 120.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            items(allAlbums) { album ->
-                                val blEntry = blacklistEntries.find { it.type.equals("ALBUM", true) && it.identifier.equals(album, true) }
-                                val wlEntry = whitelistEntries.find { it.type.equals("ALBUM", true) && it.identifier.equals(album, true) }
-                                var showMenu by remember { mutableStateOf(false) }
-
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { activeSubFilter = LibrarySubFilter.Album(album) },
-                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                                    shape = RoundedCornerShape(16.dp)
-                                ) {
-                                    Column(modifier = Modifier.padding(14.dp)) {
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .height(104.dp)
-                                                .clip(RoundedCornerShape(12.dp))
-                                                .background(MaterialTheme.colorScheme.primaryContainer),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                Icons.Rounded.Album,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(48.dp)
+                        if (allAlbums.isEmpty()) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CassetteEmptyStateCard(
+                                    icon = Icons.Rounded.Album,
+                                    title = "No Albums Indexed",
+                                    subtitle = "Local albums will appear here as collectible cassette tapes."
+                                )
+                            }
+                        } else {
+                            LazyVerticalGrid(
+                                columns = GridCells.Fixed(2),
+                                contentPadding = PaddingValues(top = 14.dp, bottom = 120.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(16.dp),
+                                modifier = Modifier.testTag("library_albums_grid")
+                            ) {
+                                items(allAlbums, key = { it }) { album ->
+                                    val albumTracks = tracksByAlbum[album.trim().lowercase()].orEmpty()
+                                    val repTrack = remember(album, albumTracks) {
+                                        albumTracks.firstOrNull { it.artworkUri.isNotBlank() }
+                                            ?: albumTracks.firstOrNull()
+                                            ?: AudioTrack(
+                                                id = -album.hashCode().toLong(),
+                                                title = album,
+                                                artist = "SANGEET",
+                                                album = album
                                             )
-                                            Box(modifier = Modifier.align(Alignment.TopEnd)) {
-                                                IconButton(onClick = { showMenu = true }) {
-                                                    Icon(Icons.Rounded.MoreVert, contentDescription = "Album Options")
+                                    }
+                                    val blEntry = blacklistEntries.find {
+                                        it.type.equals("ALBUM", true) && it.identifier.equals(album, true)
+                                    }
+                                    val wlEntry = whitelistEntries.find {
+                                        it.type.equals("ALBUM", true) && it.identifier.equals(album, true)
+                                    }
+                                    val isAlbumPlaying = currentPlayingTrack?.album?.equals(album, ignoreCase = true) == true
+                                    var showMenu by remember { mutableStateOf(false) }
+
+                                    val interactionSource = remember { MutableInteractionSource() }
+                                    val isPressed by interactionSource.collectIsPressedAsState()
+                                    val scale by animateFloatAsState(
+                                        targetValue = if (isPressed) 0.96f else 1f,
+                                        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+                                        label = "albumCardScale"
+                                    )
+
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .graphicsLayer {
+                                                scaleX = scale
+                                                scaleY = scale
+                                            }
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .clickable(
+                                                interactionSource = interactionSource,
+                                                indication = ripple()
+                                            ) { activeSubFilter = LibrarySubFilter.Album(album) }
+                                            .testTag("album_cassette_card_${album.lowercase().replace(' ', '_')}")
+                                    ) {
+                                        Box(modifier = Modifier.fillMaxWidth()) {
+                                            CassetteArtworkCard(
+                                                track = repTrack,
+                                                isCurrentlyPlaying = isAlbumPlaying,
+                                                isAudioPlaying = isAudioPlaying && isAppResumed,
+                                                isVisible = true,
+                                                crossfadeDurationMs = 200,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .height(116.dp)
+                                            )
+                                            Box(
+                                                modifier = Modifier
+                                                    .align(Alignment.TopEnd)
+                                                    .padding(4.dp)
+                                            ) {
+                                                Surface(
+                                                    shape = CircleShape,
+                                                    color = Color.Black.copy(alpha = 0.62f),
+                                                    modifier = Modifier.size(34.dp)
+                                                ) {
+                                                    IconButton(
+                                                        onClick = { showMenu = true },
+                                                        modifier = Modifier.fillMaxSize()
+                                                    ) {
+                                                        Icon(
+                                                            Icons.Rounded.MoreVert,
+                                                            contentDescription = "Album Options",
+                                                            tint = Color.White,
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                    }
                                                 }
                                                 DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                                    DropdownMenuItem(
+                                                        text = { Text("Play Album") },
+                                                        onClick = {
+                                                            if (albumTracks.isNotEmpty()) {
+                                                                playbackManager.playTrack(albumTracks.first(), albumTracks)
+                                                            }
+                                                            showMenu = false
+                                                        }
+                                                    )
+                                                    DropdownMenuItem(
+                                                        text = { Text("Shuffle Album") },
+                                                        onClick = {
+                                                            if (albumTracks.isNotEmpty()) {
+                                                                val shuffled = albumTracks.shuffled()
+                                                                playbackManager.playTrack(shuffled.first(), shuffled)
+                                                            }
+                                                            showMenu = false
+                                                        }
+                                                    )
+                                                    DropdownMenuItem(
+                                                        text = { Text("Add to Playlist") },
+                                                        onClick = {
+                                                            if (albumTracks.isNotEmpty()) {
+                                                                tracksToAddToPlaylist = albumTracks
+                                                            }
+                                                            showMenu = false
+                                                        }
+                                                    )
+                                                    DropdownMenuItem(
+                                                        text = { Text("Album Details") },
+                                                        onClick = {
+                                                            activeSubFilter = LibrarySubFilter.Album(album)
+                                                            showMenu = false
+                                                        }
+                                                    )
+                                                    HorizontalDivider()
                                                     if (blEntry != null) {
                                                         DropdownMenuItem(
                                                             text = { Text("Remove from Blacklist") },
@@ -487,17 +823,27 @@ fun LibraryScreen(
                                                 }
                                             }
                                         }
+
                                         Spacer(Modifier.height(8.dp))
                                         Text(
                                             text = album,
                                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = if (isAlbumPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                                             maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(horizontal = 4.dp)
                                         )
                                         Text(
-                                            text = if (wlEntry != null) "Whitelisted Album" else "Album",
+                                            text = buildString {
+                                                append(repTrack.artist)
+                                                if (albumTracks.isNotEmpty()) append(" • ${albumTracks.size} tracks")
+                                                if (wlEntry != null) append(" • Whitelisted")
+                                            },
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = if (wlEntry != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                            color = if (wlEntry != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(horizontal = 4.dp)
                                         )
                                     }
                                 }
@@ -506,87 +852,93 @@ fun LibraryScreen(
                     }
 
                     LibraryTab.ARTISTS -> {
-                        LazyColumn(
-                            contentPadding = PaddingValues(top = 16.dp, bottom = 120.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            items(allArtists) { artist ->
-                                val blEntry = blacklistEntries.find { it.type.equals("ARTIST", true) && it.identifier.equals(artist, true) }
-                                val wlEntry = whitelistEntries.find { it.type.equals("ARTIST", true) && it.identifier.equals(artist, true) }
-                                var showMenu by remember { mutableStateOf(false) }
-
-                                Surface(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .clickable { activeSubFilter = LibrarySubFilter.Artist(artist) },
-                                    color = MaterialTheme.colorScheme.surfaceVariant
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            Icons.Rounded.Person,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(30.dp)
-                                        )
-                                        Spacer(Modifier.width(14.dp))
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = artist,
-                                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                                                color = MaterialTheme.colorScheme.onSurface,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                            if (wlEntry != null) {
-                                                Text("Whitelisted", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                                            }
-                                        }
-                                        Box {
-                                            IconButton(onClick = { showMenu = true }) {
-                                                Icon(Icons.Rounded.MoreVert, contentDescription = "Artist Options")
-                                            }
-                                            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                                                if (blEntry != null) {
-                                                    DropdownMenuItem(
-                                                        text = { Text("Remove from Blacklist") },
-                                                        onClick = {
-                                                            coroutineScope.launch { repository.removeFromBlacklist(blEntry.id) }
-                                                            showMenu = false
-                                                        }
-                                                    )
-                                                } else {
-                                                    DropdownMenuItem(
-                                                        text = { Text("Add to Blacklist") },
-                                                        onClick = {
-                                                            proposeRule(QuickRuleProposal(RuleListKind.BLACKLIST, RuleType.ARTIST, artist, artist))
-                                                            showMenu = false
-                                                        }
-                                                    )
-                                                }
-                                                if (wlEntry != null) {
-                                                    DropdownMenuItem(
-                                                        text = { Text("Remove from Whitelist") },
-                                                        onClick = {
-                                                            coroutineScope.launch { repository.removeFromWhitelist(wlEntry.id) }
-                                                            showMenu = false
-                                                        }
-                                                    )
-                                                } else {
-                                                    DropdownMenuItem(
-                                                        text = { Text("Add to Whitelist") },
-                                                        onClick = {
-                                                            proposeRule(QuickRuleProposal(RuleListKind.WHITELIST, RuleType.ARTIST, artist, artist))
-                                                            showMenu = false
-                                                        }
-                                                    )
-                                                }
-                                            }
-                                        }
+                        if (allArtists.isEmpty()) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CassetteEmptyStateCard(
+                                    icon = Icons.Rounded.Person,
+                                    title = "No Artists Found",
+                                    subtitle = "Artists from your offline collection will appear here."
+                                )
+                            }
+                        } else {
+                            LazyColumn(
+                                contentPadding = PaddingValues(top = 14.dp, bottom = 120.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                items(allArtists, key = { it }) { artist ->
+                                    val artistTracks = tracksByArtist[artist.trim().lowercase()].orEmpty()
+                                    val repTrack = artistTracks.firstOrNull { it.artworkUri.isNotBlank() }
+                                        ?: artistTracks.firstOrNull()
+                                    val blEntry = blacklistEntries.find {
+                                        it.type.equals("ARTIST", true) && it.identifier.equals(artist, true)
                                     }
+                                    val wlEntry = whitelistEntries.find {
+                                        it.type.equals("ARTIST", true) && it.identifier.equals(artist, true)
+                                    }
+                                    var showMenu by remember { mutableStateOf(false) }
+
+                                    CassetteArtistCard(
+                                        artistName = artist,
+                                        representativeTrack = repTrack,
+                                        trackCount = artistTracks.size,
+                                        isCurrentlyPlaying = currentPlayingTrack?.artist?.equals(artist, ignoreCase = true) == true,
+                                        onClick = { activeSubFilter = LibrarySubFilter.Artist(artist) },
+                                        trailingAction = {
+                                            Box {
+                                                IconButton(
+                                                    onClick = { showMenu = true },
+                                                    modifier = Modifier.minimumInteractiveComponentSize()
+                                                ) {
+                                                    Icon(Icons.Rounded.MoreVert, contentDescription = "Artist Options")
+                                                }
+                                                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                                    DropdownMenuItem(
+                                                        text = { Text("Play All") },
+                                                        onClick = {
+                                                            if (artistTracks.isNotEmpty()) {
+                                                                playbackManager.playTrack(artistTracks.first(), artistTracks)
+                                                            }
+                                                            showMenu = false
+                                                        }
+                                                    )
+                                                    if (blEntry != null) {
+                                                        DropdownMenuItem(
+                                                            text = { Text("Remove from Blacklist") },
+                                                            onClick = {
+                                                                coroutineScope.launch { repository.removeFromBlacklist(blEntry.id) }
+                                                                showMenu = false
+                                                            }
+                                                        )
+                                                    } else {
+                                                        DropdownMenuItem(
+                                                            text = { Text("Add to Blacklist") },
+                                                            onClick = {
+                                                                proposeRule(QuickRuleProposal(RuleListKind.BLACKLIST, RuleType.ARTIST, artist, artist))
+                                                                showMenu = false
+                                                            }
+                                                        )
+                                                    }
+                                                    if (wlEntry != null) {
+                                                        DropdownMenuItem(
+                                                            text = { Text("Remove from Whitelist") },
+                                                            onClick = {
+                                                                coroutineScope.launch { repository.removeFromWhitelist(wlEntry.id) }
+                                                                showMenu = false
+                                                            }
+                                                        )
+                                                    } else {
+                                                        DropdownMenuItem(
+                                                            text = { Text("Add to Whitelist") },
+                                                            onClick = {
+                                                                proposeRule(QuickRuleProposal(RuleListKind.WHITELIST, RuleType.ARTIST, artist, artist))
+                                                                showMenu = false
+                                                            }
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    )
                                 }
                             }
                         }
@@ -635,13 +987,9 @@ fun LibraryScreen(
                                 val isSelected = folder.canonicalKey in selectedFolderKeys
                                 var showMenu by remember { mutableStateOf(false) }
 
-                                Surface(
-                                    shape = RoundedCornerShape(14.dp),
-                                    color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-                                    else MaterialTheme.colorScheme.surfaceVariant,
+                                Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(14.dp))
                                         .combinedClickable(
                                             onClick = {
                                                 if (isSelectionMode) {
@@ -656,176 +1004,280 @@ fun LibraryScreen(
                                             }
                                         )
                                 ) {
-                                    Row(
-                                        modifier = Modifier.padding(14.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        if (isSelectionMode) {
-                                            Checkbox(
-                                                checked = isSelected,
-                                                onCheckedChange = {
-                                                    selectedFolderKeys = if (it) selectedFolderKeys + folder.canonicalKey else selectedFolderKeys - folder.canonicalKey
-                                                }
-                                            )
-                                        } else {
-                                            Icon(
-                                                imageVector = if (folder.isBlacklisted) Icons.Rounded.FolderOff else Icons.Rounded.Folder,
-                                                contentDescription = null,
-                                                tint = if (folder.isBlacklisted) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(30.dp)
-                                            )
-                                        }
-                                        Spacer(Modifier.width(12.dp))
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = folder.displayName,
-                                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                            Text(
-                                                text = folder.displayPath,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                            Text(
-                                                text = buildString {
-                                                    append("${folder.audioCount} songs • ${folder.videoCount} videos")
-                                                    if (folder.isBlacklisted) append(" • BLACKLISTED")
-                                                    else if (folder.isWhitelisted) append(" • WHITELISTED")
-                                                },
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = if (folder.isBlacklisted) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                                            )
-                                        }
-                                        Box {
-                                            IconButton(onClick = { showMenu = true }) {
-                                                Icon(Icons.Rounded.MoreVert, contentDescription = "Folder Options")
+                                    CassetteFolderBoxCard(
+                                        folderName = folder.displayName,
+                                        folderPath = folder.displayPath,
+                                        itemCountLabel = buildString {
+                                            append("${folder.audioCount}S • ${folder.videoCount}V")
+                                            if (folder.isBlacklisted) append(" • BL")
+                                            else if (folder.isWhitelisted) append(" • WL")
+                                        },
+                                        isSelected = isSelected,
+                                        onClick = {
+                                            if (isSelectionMode) {
+                                                selectedFolderKeys = if (isSelected) selectedFolderKeys - folder.canonicalKey else selectedFolderKeys + folder.canonicalKey
+                                            } else {
+                                                activeSubFilter = LibrarySubFilter.FolderFilter(folder)
                                             }
-                                            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                                                if (folder.isBlacklisted) {
-                                                    DropdownMenuItem(
-                                                        text = { Text("Remove from Blacklist") },
-                                                        onClick = {
-                                                            coroutineScope.launch {
-                                                                folder.blacklistRuleId?.let { repository.removeFolderRule(it) }
-                                                                folder.blacklistEntryId?.let { repository.removeFromBlacklist(it) }
-                                                            }
-                                                            showMenu = false
-                                                        }
-                                                    )
-                                                } else {
-                                                    DropdownMenuItem(
-                                                        text = { Text("Add to Blacklist") },
-                                                        onClick = {
-                                                            proposeRule(
-                                                                QuickRuleProposal(
-                                                                    targetList = RuleListKind.BLACKLIST,
-                                                                    ruleType = RuleType.FOLDER,
-                                                                    identifier = folder.displayPath,
-                                                                    title = folder.displayName,
-                                                                    displayPath = folder.displayPath,
-                                                                    documentId = folder.documentId,
-                                                                    treeUri = folder.treeUri,
-                                                                    affectedCount = folder.audioCount + folder.videoCount
-                                                                )
+                                        },
+                                        trailingActions = {
+                                            if (isSelectionMode) {
+                                                Checkbox(
+                                                    checked = isSelected,
+                                                    onCheckedChange = {
+                                                        selectedFolderKeys = if (it) selectedFolderKeys + folder.canonicalKey else selectedFolderKeys - folder.canonicalKey
+                                                    }
+                                                )
+                                            } else {
+                                                Box {
+                                                    IconButton(
+                                                        onClick = { showMenu = true },
+                                                        modifier = Modifier.minimumInteractiveComponentSize()
+                                                    ) {
+                                                        Icon(Icons.Rounded.MoreVert, contentDescription = "Folder Options")
+                                                    }
+                                                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                                        if (folder.isBlacklisted) {
+                                                            DropdownMenuItem(
+                                                                text = { Text("Remove from Blacklist") },
+                                                                onClick = {
+                                                                    coroutineScope.launch {
+                                                                        folder.blacklistRuleId?.let { repository.removeFolderRule(it) }
+                                                                        folder.blacklistEntryId?.let { repository.removeFromBlacklist(it) }
+                                                                    }
+                                                                    showMenu = false
+                                                                }
                                                             )
-                                                            showMenu = false
-                                                        }
-                                                    )
-                                                }
-                                                if (folder.isWhitelisted) {
-                                                    DropdownMenuItem(
-                                                        text = { Text("Remove from Whitelist") },
-                                                        onClick = {
-                                                            coroutineScope.launch {
-                                                                folder.whitelistRuleId?.let { repository.removeFolderRule(it) }
-                                                                folder.whitelistEntryId?.let { repository.removeFromWhitelist(it) }
-                                                            }
-                                                            showMenu = false
-                                                        }
-                                                    )
-                                                } else {
-                                                    DropdownMenuItem(
-                                                        text = { Text("Add to Whitelist") },
-                                                        onClick = {
-                                                            proposeRule(
-                                                                QuickRuleProposal(
-                                                                    targetList = RuleListKind.WHITELIST,
-                                                                    ruleType = RuleType.FOLDER,
-                                                                    identifier = folder.displayPath,
-                                                                    title = folder.displayName,
-                                                                    displayPath = folder.displayPath,
-                                                                    documentId = folder.documentId,
-                                                                    treeUri = folder.treeUri,
-                                                                    affectedCount = folder.audioCount + folder.videoCount
-                                                                )
+                                                        } else {
+                                                            DropdownMenuItem(
+                                                                text = { Text("Add to Blacklist") },
+                                                                onClick = {
+                                                                    proposeRule(
+                                                                        QuickRuleProposal(
+                                                                            targetList = RuleListKind.BLACKLIST,
+                                                                            ruleType = RuleType.FOLDER,
+                                                                            identifier = folder.displayPath,
+                                                                            title = folder.displayName,
+                                                                            displayPath = folder.displayPath,
+                                                                            documentId = folder.documentId,
+                                                                            treeUri = folder.treeUri,
+                                                                            affectedCount = folder.audioCount + folder.videoCount
+                                                                        )
+                                                                    )
+                                                                    showMenu = false
+                                                                }
                                                             )
-                                                            showMenu = false
                                                         }
-                                                    )
+                                                        if (folder.isWhitelisted) {
+                                                            DropdownMenuItem(
+                                                                text = { Text("Remove from Whitelist") },
+                                                                onClick = {
+                                                                    coroutineScope.launch {
+                                                                        folder.whitelistRuleId?.let { repository.removeFolderRule(it) }
+                                                                        folder.whitelistEntryId?.let { repository.removeFromWhitelist(it) }
+                                                                    }
+                                                                    showMenu = false
+                                                                }
+                                                            )
+                                                        } else {
+                                                            DropdownMenuItem(
+                                                                text = { Text("Add to Whitelist") },
+                                                                onClick = {
+                                                                    proposeRule(
+                                                                        QuickRuleProposal(
+                                                                            targetList = RuleListKind.WHITELIST,
+                                                                            ruleType = RuleType.FOLDER,
+                                                                            identifier = folder.displayPath,
+                                                                            title = folder.displayName,
+                                                                            displayPath = folder.displayPath,
+                                                                            documentId = folder.documentId,
+                                                                            treeUri = folder.treeUri,
+                                                                            affectedCount = folder.audioCount + folder.videoCount
+                                                                        )
+                                                                    )
+                                                                    showMenu = false
+                                                                }
+                                                            )
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
+                                    )
                                 }
                             }
                         }
                     }
 
                     LibraryTab.GENRES -> {
-                        LazyVerticalGrid(
-                            columns = GridCells.Fixed(2),
-                            contentPadding = PaddingValues(top = 16.dp, bottom = 120.dp),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            items(allGenres) { genre ->
-                                Surface(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(80.dp)
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .clickable { activeSubFilter = LibrarySubFilter.Genre(genre) },
-                                    color = MaterialTheme.colorScheme.surfaceVariant
-                                ) {
-                                    Box(modifier = Modifier.padding(16.dp), contentAlignment = Alignment.CenterStart) {
-                                        Text(
-                                            text = genre,
-                                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
-                                    }
+                        if (allGenres.isEmpty()) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CassetteEmptyStateCard(
+                                    icon = Icons.Rounded.Category,
+                                    title = "No Genres Indexed",
+                                    subtitle = "Genre tape channels will populate automatically from your music library."
+                                )
+                            }
+                        } else {
+                            LazyVerticalGrid(
+                                columns = GridCells.Fixed(2),
+                                contentPadding = PaddingValues(top = 14.dp, bottom = 120.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                items(allGenres.indices.toList()) { idx ->
+                                    val genre = allGenres[idx]
+                                    val count = tracksByGenre[genre.trim().lowercase()]?.size ?: 0
+                                    CassetteGenreCard(
+                                        genreName = genre,
+                                        trackCount = count,
+                                        index = idx,
+                                        onClick = { activeSubFilter = LibrarySubFilter.Genre(genre) }
+                                    )
                                 }
                             }
                         }
                     }
 
                     LibraryTab.PLAYLISTS -> {
-                        LazyColumn(
-                            contentPadding = PaddingValues(top = 16.dp, bottom = 120.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            items(playlists) { playlist ->
-                                Surface(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .clickable { activeSubFilter = LibrarySubFilter.PlaylistFilter(playlist.id, playlist.name) },
-                                    color = MaterialTheme.colorScheme.surfaceVariant
-                                ) {
-                                    Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Rounded.QueueMusic, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
-                                        Spacer(Modifier.width(16.dp))
-                                        Text(
-                                            text = playlist.name,
-                                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                                            modifier = Modifier.weight(1f)
+                        if (playlists.isEmpty()) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CassetteEmptyStateCard(
+                                    icon = Icons.Rounded.QueueMusic,
+                                    title = "No Cassette Mixtapes Yet",
+                                    subtitle = "Create an offline playlist to organize your favorite tracks into custom cassette collections.",
+                                    action = {
+                                        Button(onClick = { showCreatePlaylistDialog = true }) {
+                                            Icon(Icons.Rounded.PlaylistAdd, contentDescription = null)
+                                            Spacer(Modifier.width(8.dp))
+                                            Text("Create Playlist")
+                                        }
+                                    }
+                                )
+                            }
+                        } else {
+                            LazyColumn(
+                                contentPadding = PaddingValues(top = 14.dp, bottom = 120.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                items(playlists, key = { it.id }) { playlist ->
+                                    val playlistTracks by repository.getPlaylistTracks(playlist.id).collectAsState(initial = emptyList())
+                                    val firstWithArt = playlistTracks.firstOrNull { it.artworkUri.isNotBlank() } ?: playlistTracks.firstOrNull()
+                                    val coverTrack = remember(playlist.id, playlist.customArtworkUri, playlistTracks) {
+                                        AudioTrack(
+                                            id = -playlist.id - 3000L,
+                                            title = playlist.name,
+                                            artist = "Mixtape",
+                                            album = "${playlistTracks.size} tracks",
+                                            path = firstWithArt?.path.orEmpty(),
+                                            artworkUri = playlist.customArtworkUri.ifBlank { firstWithArt?.artworkUri.orEmpty() }
                                         )
-                                        IconButton(onClick = { coroutineScope.launch { repository.deletePlaylist(playlist.id) } }) {
-                                            Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    var showMenu by remember { mutableStateOf(false) }
+
+                                    CassetteSectionCard(
+                                        onClick = { activeSubFilter = LibrarySubFilter.PlaylistFilter(playlist.id, playlist.name) }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            CassetteArtwork(
+                                                track = coverTrack,
+                                                isPlaying = false,
+                                                showMetadataOnLabel = false,
+                                                compact = false,
+                                                modifier = Modifier
+                                                    .width(96.dp)
+                                                    .height(62.dp)
+                                            )
+                                            Spacer(Modifier.width(12.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = playlist.name,
+                                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                                    color = MaterialTheme.colorScheme.onSurface,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Spacer(Modifier.height(3.dp))
+                                                CassetteHeaderBadge(
+                                                    text = "${playlistTracks.size} ${if (playlistTracks.size == 1) "TRACK" else "TRACKS"}"
+                                                )
+                                            }
+                                            IconButton(
+                                                onClick = {
+                                                    if (playlistTracks.isNotEmpty()) {
+                                                        playbackManager.playTrack(playlistTracks.first(), playlistTracks)
+                                                    } else {
+                                                        activeSubFilter = LibrarySubFilter.PlaylistFilter(playlist.id, playlist.name)
+                                                    }
+                                                },
+                                                modifier = Modifier.minimumInteractiveComponentSize()
+                                            ) {
+                                                Icon(
+                                                    Icons.Rounded.PlayArrow,
+                                                    contentDescription = "Play Playlist",
+                                                    tint = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                            Box {
+                                                IconButton(
+                                                    onClick = { showMenu = true },
+                                                    modifier = Modifier.minimumInteractiveComponentSize()
+                                                ) {
+                                                    Icon(Icons.Rounded.MoreVert, contentDescription = "Playlist Options")
+                                                }
+                                                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                                    DropdownMenuItem(
+                                                        text = { Text("Play All") },
+                                                        onClick = {
+                                                            if (playlistTracks.isNotEmpty()) {
+                                                                playbackManager.playTrack(playlistTracks.first(), playlistTracks)
+                                                            }
+                                                            showMenu = false
+                                                        }
+                                                    )
+                                                    DropdownMenuItem(
+                                                        text = { Text("Shuffle Playlist") },
+                                                        onClick = {
+                                                            if (playlistTracks.isNotEmpty()) {
+                                                                val shuffled = playlistTracks.shuffled()
+                                                                playbackManager.playTrack(shuffled.first(), shuffled)
+                                                            }
+                                                            showMenu = false
+                                                        }
+                                                    )
+                                                    DropdownMenuItem(
+                                                        text = { Text("Rename") },
+                                                        onClick = {
+                                                            playlistToRename = playlist
+                                                            renameText = playlist.name
+                                                            showMenu = false
+                                                        }
+                                                    )
+                                                    DropdownMenuItem(
+                                                        text = { Text("Change Cover Photo") },
+                                                        onClick = {
+                                                            playlistIdForCover = playlist.id
+                                                            showMenu = false
+                                                            coverPhotoPicker.launch(
+                                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                                            )
+                                                        }
+                                                    )
+                                                    HorizontalDivider()
+                                                    DropdownMenuItem(
+                                                        text = { Text("Delete Playlist", color = MaterialTheme.colorScheme.error) },
+                                                        onClick = {
+                                                            coroutineScope.launch { repository.deletePlaylist(playlist.id) }
+                                                            showMenu = false
+                                                        }
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -836,6 +1288,8 @@ fun LibraryScreen(
                     LibraryTab.FAVORITES -> {
                         TrackList(
                             tracks = favoriteTracks,
+                            currentTrackId = currentPlayingTrack?.id,
+                            isAudioPlaying = isAudioPlaying && isAppResumed,
                             blacklistEntries = blacklistEntries,
                             whitelistEntries = whitelistEntries,
                             isSelectionMode = isSelectionMode,
@@ -850,8 +1304,10 @@ fun LibraryScreen(
                             onPlay = { playbackManager.playTrack(it, favoriteTracks) },
                             onAddToQueue = { playbackManager.addToQueue(it) },
                             onPlayNext = { playbackManager.playNextInQueue(it) },
-                            onAddToPlaylist = { trackToAddToPlaylist = it },
+                            onAddToPlaylist = { tracksToAddToPlaylist = listOf(it) },
                             onToggleFavorite = { t -> coroutineScope.launch { repository.setTrackFavorite(t.id, !t.isFavorite) } },
+                            onViewAlbum = { album -> if (album.isNotBlank()) activeSubFilter = LibrarySubFilter.Album(album) },
+                            onViewArtist = { artist -> if (artist.isNotBlank()) activeSubFilter = LibrarySubFilter.Artist(artist) },
                             onProposeRule = proposeRule,
                             onRemoveBlacklistId = { id -> coroutineScope.launch { repository.removeFromBlacklist(id) } },
                             onRemoveWhitelistId = { id -> coroutineScope.launch { repository.removeFromWhitelist(id) } }
@@ -866,7 +1322,7 @@ fun LibraryScreen(
     if (showCreatePlaylistDialog) {
         AlertDialog(
             onDismissRequest = { showCreatePlaylistDialog = false },
-            title = { Text("New Playlist") },
+            title = { Text("New Mixtape Playlist") },
             text = {
                 OutlinedTextField(
                     value = newPlaylistName,
@@ -893,11 +1349,48 @@ fun LibraryScreen(
         )
     }
 
-    // Add Track to Playlist Dialog
-    if (trackToAddToPlaylist != null) {
+    // Rename Playlist Dialog
+    if (playlistToRename != null) {
+        val target = playlistToRename!!
         AlertDialog(
-            onDismissRequest = { trackToAddToPlaylist = null },
-            title = { Text("Add to Playlist") },
+            onDismissRequest = { playlistToRename = null },
+            title = { Text("Rename Playlist") },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    label = { Text("New Playlist Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (renameText.isNotBlank()) {
+                        coroutineScope.launch {
+                            repository.renamePlaylist(target.id, renameText.trim())
+                            playlistToRename = null
+                        }
+                    }
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { playlistToRename = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // Add Track(s) to Playlist Dialog
+    if (tracksToAddToPlaylist != null) {
+        val pendingTracks = tracksToAddToPlaylist!!
+        AlertDialog(
+            onDismissRequest = { tracksToAddToPlaylist = null },
+            title = {
+                Text(
+                    if (pendingTracks.size > 1) "Add ${pendingTracks.size} Tracks to Playlist"
+                    else "Add to Playlist"
+                )
+            },
             text = {
                 if (playlists.isEmpty()) {
                     Text("No playlists found. Create one first!")
@@ -907,8 +1400,9 @@ fun LibraryScreen(
                             TextButton(
                                 onClick = {
                                     coroutineScope.launch {
-                                        repository.addTrackToPlaylist(p.id, trackToAddToPlaylist!!.id)
-                                        trackToAddToPlaylist = null
+                                        repository.addTracksToPlaylist(p.id, pendingTracks.map { it.id })
+                                        tracksToAddToPlaylist = null
+                                        Toast.makeText(context, "Added to ${p.name}", Toast.LENGTH_SHORT).show()
                                     }
                                 },
                                 modifier = Modifier.fillMaxWidth()
@@ -920,11 +1414,10 @@ fun LibraryScreen(
                 }
             },
             confirmButton = {},
-            dismissButton = { TextButton(onClick = { trackToAddToPlaylist = null }) { Text("Close") } }
+            dismissButton = { TextButton(onClick = { tracksToAddToPlaylist = null }) { Text("Close") } }
         )
     }
 
-    // Conflict Warning Dialog for Quick Rules
     QuickRuleConflictHost(
         pendingConflict = pendingConflict,
         repository = repository,
@@ -933,7 +1426,6 @@ fun LibraryScreen(
         onClear = { pendingConflict = null }
     )
 
-    // SAF Folder Confirmation Dialog when picked from Library -> Folders
     if (pendingSafInspection != null) {
         val insp = pendingSafInspection!!
         FolderConfirmationDialog(
@@ -973,10 +1465,286 @@ fun LibraryScreen(
     }
 }
 
+@Composable
+private fun AlbumDetailHeader(
+    albumName: String,
+    artistName: String,
+    trackCount: Int,
+    representativeTrack: AudioTrack,
+    isPlaying: Boolean,
+    onPlayAll: () -> Unit,
+    onShuffle: () -> Unit,
+    onAddToPlaylist: () -> Unit
+) {
+    CassetteSectionCard(
+        modifier = Modifier.padding(top = 12.dp, bottom = 8.dp),
+        highlighted = isPlaying
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CassetteArtworkCard(
+                track = representativeTrack,
+                isCurrentlyPlaying = isPlaying,
+                isAudioPlaying = isPlaying,
+                isVisible = true,
+                crossfadeDurationMs = 180,
+                modifier = Modifier
+                    .width(128.dp)
+                    .height(86.dp)
+            )
+            Spacer(Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                CassetteHeaderBadge(text = "ALBUM CASSETTE")
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = albumName,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "$artistName • $trackCount tracks",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                onClick = onPlayAll,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Play All")
+            }
+            FilledTonalButton(
+                onClick = onShuffle,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Rounded.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Shuffle")
+            }
+            IconButton(
+                onClick = onAddToPlaylist,
+                modifier = Modifier.minimumInteractiveComponentSize()
+            ) {
+                Icon(Icons.Rounded.PlaylistAdd, contentDescription = "Add Album to Playlist", tint = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArtistDetailHeader(
+    artistName: String,
+    representativeTrack: AudioTrack?,
+    albumTracks: List<AudioTrack>,
+    totalTracks: Int,
+    currentTrack: AudioTrack?,
+    isAudioPlaying: Boolean,
+    onPlayAll: () -> Unit,
+    onShuffle: () -> Unit,
+    onOpenAlbum: (String) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        CassetteSectionCard(
+            modifier = Modifier.padding(top = 12.dp, bottom = 10.dp),
+            highlighted = currentTrack?.artist?.equals(artistName, ignoreCase = true) == true
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Normal circular artist portrait (NOT a cassette)
+                if (representativeTrack != null) {
+                    TrackArtwork(
+                        track = representativeTrack,
+                        shape = CircleShape,
+                        contentDescription = artistName,
+                        modifier = Modifier.size(68.dp)
+                    )
+                } else {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                        modifier = Modifier.size(68.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(Icons.Rounded.Person, contentDescription = artistName, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(34.dp))
+                        }
+                    }
+                }
+                Spacer(Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    CassetteHeaderBadge(text = "ARTIST STUDIO")
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = artistName,
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Black),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "${albumTracks.size} albums • $totalTracks songs",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(onClick = onPlayAll, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Play All")
+                }
+                FilledTonalButton(onClick = onShuffle, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Rounded.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Shuffle")
+                }
+            }
+        }
+
+        if (albumTracks.isNotEmpty()) {
+            CassetteSectionHeader(
+                title = "Albums",
+                badgeText = "${albumTracks.size}",
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(bottom = 12.dp)
+            ) {
+                items(albumTracks, key = { it.album }) { rep ->
+                    val isAlbPlaying = currentTrack?.album?.equals(rep.album, ignoreCase = true) == true
+                    Column(
+                        modifier = Modifier
+                            .width(142.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable { onOpenAlbum(rep.album) }
+                    ) {
+                        CassetteArtworkCard(
+                            track = rep,
+                            isCurrentlyPlaying = isAlbPlaying,
+                            isAudioPlaying = isAudioPlaying,
+                            isVisible = true,
+                            crossfadeDurationMs = 180,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(96.dp)
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = rep.album.ifBlank { rep.title },
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaylistDetailHeader(
+    playlistName: String,
+    coverTrack: AudioTrack,
+    trackCount: Int,
+    onPlayAll: () -> Unit,
+    onShuffle: () -> Unit,
+    onRename: () -> Unit,
+    onPickCover: () -> Unit
+) {
+    CassetteSectionCard(
+        modifier = Modifier.padding(top = 12.dp, bottom = 8.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CassetteArtworkCard(
+                track = coverTrack,
+                isCurrentlyPlaying = false,
+                isAudioPlaying = false,
+                isVisible = true,
+                crossfadeDurationMs = 180,
+                modifier = Modifier
+                    .width(124.dp)
+                    .height(84.dp)
+            )
+            Spacer(Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                CassetteHeaderBadge(text = "MIXTAPE CASSETTE")
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = playlistName,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "$trackCount ${if (trackCount == 1) "track" else "tracks"}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(onClick = onPlayAll, modifier = Modifier.weight(1f)) {
+                Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Play")
+            }
+            FilledTonalButton(onClick = onShuffle, modifier = Modifier.weight(1f)) {
+                Icon(Icons.Rounded.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Shuffle")
+            }
+            IconButton(onClick = onRename, modifier = Modifier.minimumInteractiveComponentSize()) {
+                Icon(Icons.Rounded.Edit, contentDescription = "Rename Playlist", tint = MaterialTheme.colorScheme.primary)
+            }
+            IconButton(onClick = onPickCover, modifier = Modifier.minimumInteractiveComponentSize()) {
+                Icon(Icons.Rounded.Image, contentDescription = "Change Cover", tint = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TrackList(
     tracks: List<AudioTrack>,
+    currentTrackId: Long? = null,
+    isAudioPlaying: Boolean = false,
     blacklistEntries: List<BlacklistEntry> = emptyList(),
     whitelistEntries: List<WhitelistEntry> = emptyList(),
     isSelectionMode: Boolean = false,
@@ -988,185 +1756,304 @@ fun TrackList(
     onPlayNext: (AudioTrack) -> Unit,
     onAddToPlaylist: (AudioTrack) -> Unit,
     onToggleFavorite: (AudioTrack) -> Unit,
+    onViewAlbum: (String) -> Unit = {},
+    onViewArtist: (String) -> Unit = {},
     onProposeRule: (QuickRuleProposal) -> Unit = {},
     onRemoveBlacklistId: (Long) -> Unit = {},
     onRemoveWhitelistId: (Long) -> Unit = {},
+    isPlaylistReorderMode: Boolean = false,
+    onMoveTrackInPlaylist: ((Int, Int) -> Unit)? = null,
+    onRemoveTrackFromPlaylist: ((AudioTrack) -> Unit)? = null,
+    headerContent: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    if (tracks.isEmpty()) {
-        Box(
-            modifier = modifier
-                .fillMaxSize()
-                .padding(32.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text("No tracks available", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        return
-    }
-
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 12.dp, bottom = 120.dp),
+        contentPadding = PaddingValues(top = 8.dp, bottom = 120.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        items(tracks, key = { it.id }) { track ->
-            var showItemMenu by remember { mutableStateOf(false) }
-            val isSelected = track.id in selectedTrackIds
-            val trackIdentifier = track.path.ifBlank { track.id.toString() }
-            val blSongEntry = blacklistEntries.find {
-                it.type.equals("SONG", true) && (it.identifier.equals(trackIdentifier, true) || it.identifier.equals(track.title, true))
+        if (headerContent != null) {
+            item(key = "tracklist_header") {
+                headerContent()
             }
-            val wlSongEntry = whitelistEntries.find {
-                it.type.equals("SONG", true) && (it.identifier.equals(trackIdentifier, true) || it.identifier.equals(track.title, true))
-            }
+        }
 
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .combinedClickable(
-                        onClick = {
-                            if (isSelectionMode) onToggleSelect(track.id) else onPlay(track)
-                        },
-                        onLongClick = { onEnterSelectionMode(track.id) }
-                    ),
-                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else Color.Transparent
-            ) {
-                Row(
+        if (tracks.isEmpty()) {
+            item(key = "tracklist_empty") {
+                CassetteEmptyStateCard(
+                    icon = Icons.Rounded.MusicNote,
+                    title = "No Tracks Available",
+                    subtitle = "No audio cassettes match this view.",
+                    modifier = Modifier.padding(top = 18.dp)
+                )
+            }
+        } else {
+            itemsIndexed(tracks, key = { _, t -> t.id }) { index, track ->
+                var showItemMenu by remember { mutableStateOf(false) }
+                val isSelected = track.id in selectedTrackIds
+                val isPlayingThis = currentTrackId == track.id
+                val activeSpin = isPlayingThis && isAudioPlaying
+                val seedAngle = remember(track.id) { ((track.id * 41L) % 360L).toFloat() }
+                val reelAngle by rememberVisibleCassetteReelAngle(
+                    isActivelyPlayingAndVisible = activeSpin,
+                    seedAngleDegrees = seedAngle
+                )
+
+                val trackIdentifier = track.path.ifBlank { track.id.toString() }
+                val blSongEntry = blacklistEntries.find {
+                    it.type.equals("SONG", true) && (it.identifier.equals(trackIdentifier, true) || it.identifier.equals(track.title, true))
+                }
+                val wlSongEntry = whitelistEntries.find {
+                    it.type.equals("SONG", true) && (it.identifier.equals(trackIdentifier, true) || it.identifier.equals(track.title, true))
+                }
+
+                Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (isSelectionMode) {
-                        Checkbox(checked = isSelected, onCheckedChange = { onToggleSelect(track.id) })
-                        Spacer(Modifier.width(4.dp))
-                    }
-                    TrackArtwork(track = track, modifier = Modifier.size(44.dp), shape = RoundedCornerShape(10.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = track.title,
-                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = "${track.artist} • ${track.album}",
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    IconButton(onClick = { onToggleFavorite(track) }) {
-                        Icon(
-                            imageVector = if (track.isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                            contentDescription = "Favorite",
-                            tint = if (track.isFavorite) Color(0xFFFF2A6D) else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    Box {
-                        IconButton(onClick = { showItemMenu = true }) {
-                            Icon(Icons.Rounded.MoreVert, contentDescription = "More")
+                        .clip(RoundedCornerShape(14.dp))
+                        .combinedClickable(
+                            onClick = {
+                                if (isSelectionMode) onToggleSelect(track.id) else onPlay(track)
+                            },
+                            onLongClick = { onEnterSelectionMode(track.id) }
+                        ),
+                    shape = RoundedCornerShape(14.dp),
+                    color = when {
+                        isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                        isPlayingThis -> MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f)
+                    },
+                    border = BorderStroke(
+                        width = if (isPlayingThis || isSelected) 1.2.dp else 0.7.dp,
+                        color = if (isPlayingThis || isSelected) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                        } else {
+                            MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
                         }
-                        DropdownMenu(expanded = showItemMenu, onDismissRequest = { showItemMenu = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Play Next") },
-                                onClick = {
-                                    onPlayNext(track)
-                                    showItemMenu = false
-                                }
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (isSelectionMode) {
+                            Checkbox(checked = isSelected, onCheckedChange = { onToggleSelect(track.id) })
+                            Spacer(Modifier.width(4.dp))
+                        }
+
+                        MiniCassetteArtwork(
+                            track = track,
+                            isPlaying = activeSpin,
+                            reelAngleDegrees = reelAngle,
+                            modifier = Modifier
+                                .height(38.dp)
+                                .testTag("library_mini_cassette_${track.id}")
+                        )
+
+                        Spacer(Modifier.width(12.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = track.title,
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    fontWeight = if (isPlayingThis) FontWeight.Bold else FontWeight.SemiBold
+                                ),
+                                color = if (isPlayingThis) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
-                            DropdownMenuItem(
-                                text = { Text("Add to Queue") },
-                                onClick = {
-                                    onAddToQueue(track)
-                                    showItemMenu = false
-                                }
+                            Text(
+                                text = "${track.artist} • ${track.album}",
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            DropdownMenuItem(
-                                text = { Text("Add to Playlist") },
-                                onClick = {
-                                    onAddToPlaylist(track)
-                                    showItemMenu = false
-                                }
-                            )
-                            HorizontalDivider()
-                            if (blSongEntry != null) {
+                        }
+
+                        if (isPlaylistReorderMode && onMoveTrackInPlaylist != null) {
+                            IconButton(
+                                onClick = { onMoveTrackInPlaylist(index, -1) },
+                                enabled = index > 0,
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(
+                                    Icons.Rounded.KeyboardArrowUp,
+                                    contentDescription = "Move Track Up",
+                                    tint = if (index > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                )
+                            }
+                            IconButton(
+                                onClick = { onMoveTrackInPlaylist(index, 1) },
+                                enabled = index < tracks.lastIndex,
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(
+                                    Icons.Rounded.KeyboardArrowDown,
+                                    contentDescription = "Move Track Down",
+                                    tint = if (index < tracks.lastIndex) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                )
+                            }
+                        } else {
+                            IconButton(
+                                onClick = { onToggleFavorite(track) },
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (track.isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                    contentDescription = "Favorite",
+                                    tint = if (track.isFavorite) Color(0xFFFF2A6D) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+
+                        Box {
+                            IconButton(
+                                onClick = { showItemMenu = true },
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Icon(Icons.Rounded.MoreVert, contentDescription = "More Options")
+                            }
+                            DropdownMenu(expanded = showItemMenu, onDismissRequest = { showItemMenu = false }) {
                                 DropdownMenuItem(
-                                    text = { Text("Remove from Blacklist") },
+                                    text = { Text("Play") },
                                     onClick = {
-                                        onRemoveBlacklistId(blSongEntry.id)
+                                        onPlay(track)
                                         showItemMenu = false
                                     }
                                 )
-                            } else {
                                 DropdownMenuItem(
-                                    text = { Text("Add to Blacklist") },
+                                    text = { Text("Play Next") },
+                                    onClick = {
+                                        onPlayNext(track)
+                                        showItemMenu = false
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Add to Queue") },
+                                    onClick = {
+                                        onAddToQueue(track)
+                                        showItemMenu = false
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Add to Playlist") },
+                                    onClick = {
+                                        onAddToPlaylist(track)
+                                        showItemMenu = false
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (track.isFavorite) "Remove from Favorites" else "Add to Favorites") },
+                                    onClick = {
+                                        onToggleFavorite(track)
+                                        showItemMenu = false
+                                    }
+                                )
+                                if (track.album.isNotBlank()) {
+                                    DropdownMenuItem(
+                                        text = { Text("View Album") },
+                                        onClick = {
+                                            onViewAlbum(track.album)
+                                            showItemMenu = false
+                                        }
+                                    )
+                                }
+                                if (track.artist.isNotBlank()) {
+                                    DropdownMenuItem(
+                                        text = { Text("View Artist") },
+                                        onClick = {
+                                            onViewArtist(track.artist)
+                                            showItemMenu = false
+                                        }
+                                    )
+                                }
+                                if (onRemoveTrackFromPlaylist != null) {
+                                    DropdownMenuItem(
+                                        text = { Text("Remove from Playlist", color = MaterialTheme.colorScheme.error) },
+                                        onClick = {
+                                            onRemoveTrackFromPlaylist(track)
+                                            showItemMenu = false
+                                        }
+                                    )
+                                }
+                                HorizontalDivider()
+                                if (blSongEntry != null) {
+                                    DropdownMenuItem(
+                                        text = { Text("Remove from Blacklist") },
+                                        onClick = {
+                                            onRemoveBlacklistId(blSongEntry.id)
+                                            showItemMenu = false
+                                        }
+                                    )
+                                } else {
+                                    DropdownMenuItem(
+                                        text = { Text("Blacklist Song") },
+                                        onClick = {
+                                            onProposeRule(
+                                                QuickRuleProposal(
+                                                    targetList = RuleListKind.BLACKLIST,
+                                                    ruleType = RuleType.SONG,
+                                                    identifier = trackIdentifier,
+                                                    title = track.title,
+                                                    displayPath = track.path.ifBlank { track.folderPath },
+                                                    documentId = track.documentId,
+                                                    treeUri = track.sourceTreeUri,
+                                                    mediaArtist = track.artist,
+                                                    mediaAlbum = track.album
+                                                )
+                                            )
+                                            showItemMenu = false
+                                        }
+                                    )
+                                }
+                                if (wlSongEntry != null) {
+                                    DropdownMenuItem(
+                                        text = { Text("Remove from Whitelist") },
+                                        onClick = {
+                                            onRemoveWhitelistId(wlSongEntry.id)
+                                            showItemMenu = false
+                                        }
+                                    )
+                                } else {
+                                    DropdownMenuItem(
+                                        text = { Text("Whitelist Song") },
+                                        onClick = {
+                                            onProposeRule(
+                                                QuickRuleProposal(
+                                                    targetList = RuleListKind.WHITELIST,
+                                                    ruleType = RuleType.SONG,
+                                                    identifier = trackIdentifier,
+                                                    title = track.title,
+                                                    displayPath = track.path.ifBlank { track.folderPath },
+                                                    documentId = track.documentId,
+                                                    treeUri = track.sourceTreeUri,
+                                                    mediaArtist = track.artist,
+                                                    mediaAlbum = track.album
+                                                )
+                                            )
+                                            showItemMenu = false
+                                        }
+                                    )
+                                }
+                                DropdownMenuItem(
+                                    text = { Text("Blacklist Artist (${track.artist})") },
                                     onClick = {
                                         onProposeRule(
                                             QuickRuleProposal(
                                                 targetList = RuleListKind.BLACKLIST,
-                                                ruleType = RuleType.SONG,
-                                                identifier = trackIdentifier,
-                                                title = track.title,
-                                                displayPath = track.path.ifBlank { track.folderPath },
-                                                documentId = track.documentId,
-                                                treeUri = track.sourceTreeUri,
-                                                mediaArtist = track.artist,
-                                                mediaAlbum = track.album
+                                                ruleType = RuleType.ARTIST,
+                                                identifier = track.artist,
+                                                title = track.artist
                                             )
                                         )
                                         showItemMenu = false
                                     }
                                 )
                             }
-                            if (wlSongEntry != null) {
-                                DropdownMenuItem(
-                                    text = { Text("Remove from Whitelist") },
-                                    onClick = {
-                                        onRemoveWhitelistId(wlSongEntry.id)
-                                        showItemMenu = false
-                                    }
-                                )
-                            } else {
-                                DropdownMenuItem(
-                                    text = { Text("Add to Whitelist") },
-                                    onClick = {
-                                        onProposeRule(
-                                            QuickRuleProposal(
-                                                targetList = RuleListKind.WHITELIST,
-                                                ruleType = RuleType.SONG,
-                                                identifier = trackIdentifier,
-                                                title = track.title,
-                                                displayPath = track.path.ifBlank { track.folderPath },
-                                                documentId = track.documentId,
-                                                treeUri = track.sourceTreeUri,
-                                                mediaArtist = track.artist,
-                                                mediaAlbum = track.album
-                                            )
-                                        )
-                                        showItemMenu = false
-                                    }
-                                )
-                            }
-                            DropdownMenuItem(
-                                text = { Text("Blacklist Artist (${track.artist})") },
-                                onClick = {
-                                    onProposeRule(
-                                        QuickRuleProposal(
-                                            targetList = RuleListKind.BLACKLIST,
-                                            ruleType = RuleType.ARTIST,
-                                            identifier = track.artist,
-                                            title = track.artist
-                                        )
-                                    )
-                                    showItemMenu = false
-                                }
-                            )
                         }
                     }
                 }

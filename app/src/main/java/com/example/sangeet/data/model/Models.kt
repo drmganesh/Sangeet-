@@ -243,27 +243,27 @@ enum class CassetteStyle(
 ) {
     CLASSIC_BLACK(
         displayName = "Classic Black",
-        description = "Matte obsidian shell with warm golden trim",
+        description = "Matte obsidian cassette shell with cream vintage label",
         badgeText = "TYPE II • CHROME"
+    ),
+    BLACK_AND_GOLD(
+        displayName = "Black and Gold",
+        description = "SANGEET signature obsidian housing with golden-yellow trim",
+        badgeText = "SANGEET • GOLD"
     ),
     TRANSPARENT(
         displayName = "Transparent",
-        description = "Crystal-smoke shell revealing internal spools",
+        description = "Crystal-smoke shell revealing internal spools and hubs",
         badgeText = "CLEAR • C-90"
     ),
-    GOLDEN(
-        displayName = "Golden",
-        description = "Brushed 24k vintage metallic gold edition",
-        badgeText = "GOLD MASTER"
-    ),
     RETRO_BROWN(
-        displayName = "Retro Brown",
-        description = "Warm walnut & studio ferric heritage tape",
+        displayName = "Vintage Brown",
+        description = "Warm walnut & studio ferric heritage tape shell",
         badgeText = "FERRIC • TYPE I"
     ),
-    PREMIUM_METALLIC(
-        displayName = "Metallic Chrome",
-        description = "Machined brushed silver aluminum housing",
-        badgeText = "METAL • TYPE IV"
+    GOLDEN(
+        displayName = "Metallic Gold",
+        description = "Brushed 24k vintage metallic gold collector edition",
+        badgeText = "GOLD MASTER"
     )
 }

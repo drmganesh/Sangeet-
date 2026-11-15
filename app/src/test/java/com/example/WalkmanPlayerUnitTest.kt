@@ -25,7 +25,10 @@ class WalkmanPlayerUnitTest {
         assertEquals(5, entries.size)
 
         val names = entries.map { it.displayName }.toSet()
-        assertEquals(5, names.size)
+        assertEquals(
+            setOf("Classic Black", "Black and Gold", "Transparent", "Vintage Brown", "Metallic Gold"),
+            names
+        )
 
         entries.forEach { style ->
             val p = style.palette()
@@ -33,10 +36,13 @@ class WalkmanPlayerUnitTest {
             assertTrue(style.description.isNotBlank())
             assertTrue(style.badgeText.isNotBlank())
             assertNotEquals(p.labelPaper, p.labelInk)
+            assertNotEquals(p.shellPrimary, p.shellBorder)
         }
 
         assertTrue(CassetteStyle.TRANSPARENT.palette().shellAlpha < 0.85f)
         assertTrue(CassetteStyle.CLASSIC_BLACK.palette().shellAlpha > 0.95f)
+        assertTrue(CassetteStyle.BLACK_AND_GOLD.palette().shellAlpha > 0.95f)
+        assertTrue(CassetteStyle.RETRO_BROWN.palette().shellAlpha > 0.95f)
         assertTrue(CassetteStyle.GOLDEN.palette().shellAlpha > 0.95f)
     }
 

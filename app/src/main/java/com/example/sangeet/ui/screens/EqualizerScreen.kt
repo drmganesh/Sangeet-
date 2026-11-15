@@ -26,6 +26,9 @@ import com.example.sangeet.data.model.EqualizerPreset
 import com.example.sangeet.data.repository.MediaRepository
 import com.example.sangeet.dsp.EqualizerAudioProcessor
 import com.example.sangeet.playback.PlaybackManager
+import com.example.sangeet.ui.components.CassetteSectionCard
+import com.example.sangeet.ui.components.CassetteSectionHeader
+import com.example.sangeet.ui.components.CassetteTopBar
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 
@@ -89,31 +92,12 @@ fun EqualizerScreen(
             .fillMaxSize()
             .testTag("equalizer_screen"),
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = "15-BAND GRAPHIC EQUALIZER",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = if (isEnabled) "Real-time DSP Active" else "Equalizer Bypassed",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (isEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(
-                        onClick = onNavigateBack,
-                        modifier = Modifier.testTag("eq_back_btn")
-                    ) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back")
-                    }
-                },
+            CassetteTopBar(
+                title = "15-Band Equalizer",
+                subtitle = if (isEnabled) "Real-time DSP Active" else "Equalizer Bypassed",
+                badgeText = "DSP",
+                onNavigateBack = onNavigateBack,
                 actions = {
-                    // Reset Button
                     IconButton(
                         onClick = {
                             val flatGains = FloatArray(15) { 0f }
@@ -132,9 +116,8 @@ fun EqualizerScreen(
                         },
                         modifier = Modifier.testTag("eq_reset_btn")
                     ) {
-                        Icon(Icons.Rounded.Refresh, contentDescription = "Reset to Flat")
+                        Icon(Icons.Rounded.Refresh, contentDescription = "Reset to Flat", tint = MaterialTheme.colorScheme.primary)
                     }
-                    // Master On/Off Switch
                     Switch(
                         checked = isEnabled,
                         onCheckedChange = {
@@ -196,28 +179,12 @@ fun EqualizerScreen(
             }
 
             // 15 Vertical Graphic Equalizer Sliders
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(20.dp)
-            ) {
+            CassetteSectionCard(highlighted = isEnabled) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "FREQUENCY BANDS (±12 dB)",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = "Biquad IIR Filter Bank",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
+                    CassetteSectionHeader(
+                        title = "Frequency Bands (±12 dB)",
+                        badgeText = "BIQUAD IIR"
+                    )
 
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -282,20 +249,12 @@ fun EqualizerScreen(
             }
 
             // Audio Enhancements & Controls Panel
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(20.dp)
-            ) {
+            CassetteSectionCard {
                 Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Text(
-                        text = "ENHANCEMENT & DYNAMICS",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    CassetteSectionHeader(title = "Enhancement & Dynamics")
 
                     // Bass Boost Slider
                     Column {

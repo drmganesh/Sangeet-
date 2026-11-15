@@ -38,6 +38,7 @@ import com.example.sangeet.ui.components.AnimatedFeaturedSpotlightCard
 import com.example.sangeet.ui.components.AnimatedQuickPickCard
 import com.example.sangeet.ui.components.ArtworkAnimationPreferencesSnapshot
 import com.example.sangeet.ui.components.CassetteArtworkCard
+import com.example.sangeet.ui.components.CassetteEmptyStateCard
 import com.example.sangeet.ui.components.MiniCassetteArtwork
 import com.example.sangeet.ui.components.rememberCarouselBreathingPhase
 import com.example.sangeet.ui.components.rememberEffectiveArtworkMotion
@@ -54,6 +55,9 @@ fun HomeScreen(
     onNavigateToEqualizer: () -> Unit,
     onNavigateToSpatial: () -> Unit,
     onNavigateToLibrary: () -> Unit,
+    onOpenArtist: (String) -> Unit = {},
+    onOpenAlbum: (String) -> Unit = {},
+    onOpenPlaylist: (Long, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -220,59 +224,30 @@ fun HomeScreen(
         // Empty State: Prompt user to Scan or Generate High-Fidelity Demo Audio
         if (allTracks.isEmpty()) {
             item {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(24.dp)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        Icon(
-                            Icons.Rounded.LibraryMusic,
-                            contentDescription = "Empty",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(56.dp)
-                        )
-                        Text(
-                            text = "No Offline Music Found",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "Scan your device's audio files or generate our built-in offline studio tracks to immediately experience the 15-band EQ and 360° spatial audio.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
+                CassetteEmptyStateCard(
+                    icon = Icons.Rounded.LibraryMusic,
+                    title = "No Offline Music Found",
+                    subtitle = "Scan your device's audio files or load built-in offline studio tracks to immediately experience cassette playback, 15-band EQ, and 360° spatial audio.",
+                    modifier = Modifier.padding(horizontal = 20.dp),
+                    action = {
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             Button(
                                 onClick = {
-                                    coroutineScope.launch {
-                                        repository.scanMusic()
-                                    }
+                                    coroutineScope.launch { repository.scanMusic() }
                                 }
                             ) {
                                 Text("Scan Storage")
                             }
                             FilledTonalButton(
                                 onClick = {
-                                    coroutineScope.launch {
-                                        repository.generateDemoTracks()
-                                    }
+                                    coroutineScope.launch { repository.generateDemoTracks() }
                                 }
                             ) {
                                 Text("Load Demo Music")
                             }
                         }
                     }
-                }
+                )
             }
         }
 
@@ -381,7 +356,7 @@ fun HomeScreen(
                                     isSelected = currentlyPlayingTrack?.artist?.equals(artist, ignoreCase = true) == true,
                                     motion = motion,
                                     rowState = artistRowState,
-                                    onClick = { onNavigateToLibrary() }
+                                    onClick = { onOpenArtist(artist) }
                                 )
                             }
                         }

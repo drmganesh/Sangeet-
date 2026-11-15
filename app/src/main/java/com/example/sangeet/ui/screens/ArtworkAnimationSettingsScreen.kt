@@ -41,6 +41,9 @@ import com.example.sangeet.ui.components.ArtworkAnimationStyle
 import com.example.sangeet.ui.components.ArtworkMotionPlanner
 import com.example.sangeet.ui.components.CassetteArtwork
 import com.example.sangeet.ui.components.CassettePrintedArtImage
+import com.example.sangeet.ui.components.CassetteSectionCard
+import com.example.sangeet.ui.components.CassetteSectionHeader
+import com.example.sangeet.ui.components.CassetteTopBar
 import com.example.sangeet.ui.components.SpotlightArtworkTransitionHost
 import com.example.sangeet.ui.components.SpotlightTransitionDirection
 import com.example.sangeet.ui.components.SpotlightTransitionSpeed
@@ -91,29 +94,11 @@ fun ArtworkAnimationSettingsScreen(
             .fillMaxSize()
             .testTag("artwork_animation_settings_screen"),
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = "Home Artwork Animations",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "Featured Spotlight transitions, Ken Burns, parallax & cover FX",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(
-                        onClick = onNavigateBack,
-                        modifier = Modifier.testTag("art_anim_back_btn")
-                    ) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
-                    }
-                },
+            CassetteTopBar(
+                title = "Artwork Animations",
+                subtitle = "Featured Spotlight transitions, Ken Burns, parallax & cover FX",
+                badgeText = "FX",
+                onNavigateBack = onNavigateBack,
                 actions = {
                     IconButton(
                         onClick = { showResetDialog = true },
@@ -159,20 +144,12 @@ fun ArtworkAnimationSettingsScreen(
 
             // 2. Featured Album Animation Selector (Slide, Fade, Page Turn, None) with pre-selection Preview
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(20.dp)
-                ) {
+                CassetteSectionCard {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text(
-                            text = "FEATURED ALBUM ANIMATION",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        CassetteSectionHeader(title = "Featured Album Animation")
                         Text(
                             text = "Select how Featured Spotlight artwork transitions between albums, or tap Preview first",
                             style = MaterialTheme.typography.bodySmall,
@@ -250,22 +227,14 @@ fun ArtworkAnimationSettingsScreen(
             // 3. Featured Animation Speed & Direction
             item {
                 val transitionEnabled = (previewStyleOverride ?: prefs.spotlightTransitionStyle) != SpotlightTransitionStyle.NONE
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .alpha(if (transitionEnabled || prefs.spotlightTransitionStyle != SpotlightTransitionStyle.NONE) 1f else 0.55f),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(20.dp)
+                CassetteSectionCard(
+                    modifier = Modifier.alpha(if (transitionEnabled || prefs.spotlightTransitionStyle != SpotlightTransitionStyle.NONE) 1f else 0.55f)
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Text(
-                            text = "ANIMATION SPEED",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        CassetteSectionHeader(title = "Animation Speed")
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -348,20 +317,12 @@ fun ArtworkAnimationSettingsScreen(
 
             // 4. Ambient & Cover FX Style Selector
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(20.dp)
-                ) {
+                CassetteSectionCard {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text(
-                            text = "HOME COVER MOTION STYLE",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        CassetteSectionHeader(title = "Home Cover Motion Style")
 
                         ArtworkAnimationStyle.entries.forEach { style ->
                             val selected = prefs.style == style
@@ -413,22 +374,14 @@ fun ArtworkAnimationSettingsScreen(
             // 5. Animation Intensity Control
             item {
                 val styleEnabled = prefs.style != ArtworkAnimationStyle.NONE
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .alpha(if (styleEnabled) 1f else 0.5f),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(20.dp)
+                CassetteSectionCard(
+                    modifier = Modifier.alpha(if (styleEnabled) 1f else 0.5f)
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text(
-                            text = "COVER MOTION INTENSITY",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        CassetteSectionHeader(title = "Cover Motion Intensity")
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -454,22 +407,14 @@ fun ArtworkAnimationSettingsScreen(
             // 6. Individual Effects Toggles
             item {
                 val styleEnabled = prefs.style != ArtworkAnimationStyle.NONE
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .alpha(if (styleEnabled) 1f else 0.5f),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(20.dp)
+                CassetteSectionCard(
+                    modifier = Modifier.alpha(if (styleEnabled) 1f else 0.5f)
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text(
-                            text = "INDIVIDUAL ANIMATION EFFECTS",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        CassetteSectionHeader(title = "Individual Animation Effects")
 
                         AnimationToggleRow(
                             title = "Slow Zoom & Ken Burns Pan",

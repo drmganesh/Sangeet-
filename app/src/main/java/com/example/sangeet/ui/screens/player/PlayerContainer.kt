@@ -345,8 +345,12 @@ fun PlayerContainer(
             QueueSheetContent(
                 queue = queue,
                 currentTrack = track,
+                isPlaying = isPlaying,
                 onSelectTrack = { selected -> playbackManager.playTrack(selected, queue) },
                 onRemoveTrack = { idx -> playbackManager.removeFromQueue(idx) },
+                onMoveTrack = { from, to -> playbackManager.reorderQueue(from, to) },
+                onMoveToNext = { idx -> playbackManager.moveQueueItemToPlayNext(idx) },
+                onClearQueue = { playbackManager.clearQueue(keepCurrent = true) },
                 onClose = { showQueueSheet = false }
             )
         }

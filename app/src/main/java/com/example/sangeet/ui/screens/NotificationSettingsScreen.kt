@@ -45,7 +45,10 @@ import com.example.sangeet.playback.NotificationActionSlot
 import com.example.sangeet.playback.NotificationFormattingHelper
 import com.example.sangeet.playback.PlaybackManager
 import com.example.sangeet.playback.PlaybackService
-import com.example.sangeet.ui.components.TrackArtwork
+import com.example.sangeet.ui.components.CassetteSectionCard
+import com.example.sangeet.ui.components.CassetteSectionHeader
+import com.example.sangeet.ui.components.CassetteTopBar
+import com.example.sangeet.ui.components.MiniCassetteArtwork
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -88,29 +91,11 @@ fun NotificationSettingsScreen(
             .fillMaxSize()
             .testTag("notification_settings_screen"),
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = "Now Playing Notification",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "Media controls, artwork, and lock-screen privacy",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(
-                        onClick = onNavigateBack,
-                        modifier = Modifier.testTag("notif_settings_back_btn")
-                    ) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
-                    }
-                },
+            CassetteTopBar(
+                title = "Now Playing Notification",
+                subtitle = "Media controls, artwork, and lock-screen privacy",
+                badgeText = "SYS",
+                onNavigateBack = onNavigateBack,
                 actions = {
                     IconButton(
                         onClick = { showResetDialog = true },
@@ -220,11 +205,7 @@ fun NotificationSettingsScreen(
 
             // 3. Master Customization Toggle
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(20.dp)
-                ) {
+                CassetteSectionCard(highlighted = prefs.customizationEnabled) {
                     Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                         NotificationToggleRow(
                             title = "Enable Notification Customization",
@@ -247,19 +228,11 @@ fun NotificationSettingsScreen(
             // 4. Metadata & Artwork Options
             item {
                 val controlsEnabled = prefs.customizationEnabled
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .alpha(if (controlsEnabled) 1f else 0.52f),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(20.dp)
+                CassetteSectionCard(
+                    modifier = Modifier.alpha(if (controlsEnabled) 1f else 0.52f)
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(
-                            text = "ARTWORK & METADATA",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        CassetteSectionHeader(title = "Artwork & Metadata")
 
                         NotificationToggleRow(
                             title = "Show Album Artwork",
@@ -346,19 +319,11 @@ fun NotificationSettingsScreen(
             // 5. Playback Action Buttons
             item {
                 val controlsEnabled = prefs.customizationEnabled
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .alpha(if (controlsEnabled) 1f else 0.52f),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(20.dp)
+                CassetteSectionCard(
+                    modifier = Modifier.alpha(if (controlsEnabled) 1f else 0.52f)
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(
-                            text = "PLAYBACK CONTROLS",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        CassetteSectionHeader(title = "Playback Controls")
 
                         NotificationToggleRow(
                             title = "Previous & Next Controls",
@@ -402,19 +367,11 @@ fun NotificationSettingsScreen(
             // 6. Lock Screen & Privacy
             item {
                 val controlsEnabled = prefs.customizationEnabled
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .alpha(if (controlsEnabled) 1f else 0.52f),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(20.dp)
+                CassetteSectionCard(
+                    modifier = Modifier.alpha(if (controlsEnabled) 1f else 0.52f)
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Text(
-                            text = "LOCK SCREEN & PRIVACY",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        CassetteSectionHeader(title = "Lock Screen & Privacy")
 
                         Text(
                             text = "Lock Screen Media Information",
@@ -611,10 +568,10 @@ private fun NotificationPreviewCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (formatted.showArtwork) {
-                        TrackArtwork(
+                        MiniCassetteArtwork(
                             track = currentTrack,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.size(artSizeDp)
+                            isPlaying = isPlaying,
+                            modifier = Modifier.size(width = artSizeDp * 1.45f, height = artSizeDp)
                         )
                         Spacer(Modifier.width(14.dp))
                     }

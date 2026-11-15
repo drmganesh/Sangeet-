@@ -32,6 +32,10 @@ import com.example.sangeet.data.repository.MediaRepository
 import com.example.sangeet.data.rules.RuleConflict
 import com.example.sangeet.data.rules.RuleFilterEngine
 import com.example.sangeet.scanner.FolderInspectionResult
+import com.example.sangeet.ui.components.CassetteEmptyStateCard
+import com.example.sangeet.ui.components.CassetteSectionCard
+import com.example.sangeet.ui.components.CassetteSectionHeader
+import com.example.sangeet.ui.components.CassetteTopBar
 import com.example.sangeet.ui.components.ConflictWarningDialog
 import com.example.sangeet.ui.components.FolderConfirmationDialog
 import kotlinx.coroutines.launch
@@ -301,32 +305,16 @@ fun BlacklistWhitelistScreen(
             .fillMaxSize()
             .testTag("blacklist_whitelist_screen"),
         topBar = {
-            TopAppBar(
-                title = {
+            CassetteTopBar(
+                title = if (isSelectionMode) "${selectedKeys.size} Selected" else "Blacklist & Whitelist",
+                subtitle = if (isSelectionMode) "Tap rules to toggle selection" else "Offline folder & media visibility rules",
+                badgeText = if (isSelectionMode) "SELECT" else "RULES",
+                onNavigateBack = {
                     if (isSelectionMode) {
-                        Text("${selectedKeys.size} Selected")
+                        isSelectionMode = false
+                        selectedKeys = emptySet()
                     } else {
-                        Text(
-                            text = "Blacklist & Whitelist",
-                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(
-                        onClick = {
-                            if (isSelectionMode) {
-                                isSelectionMode = false
-                                selectedKeys = emptySet()
-                            } else {
-                                onNavigateBack()
-                            }
-                        }
-                    ) {
-                        Icon(
-                            imageVector = if (isSelectionMode) Icons.Rounded.Close else Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = "Back"
-                        )
+                        onNavigateBack()
                     }
                 },
                 actions = {
@@ -337,7 +325,7 @@ fun BlacklistWhitelistScreen(
                                 selectedKeys = if (selectedKeys.size == allKeys.size) emptySet() else allKeys
                             }
                         ) {
-                            Icon(Icons.Rounded.SelectAll, contentDescription = "Select All")
+                            Icon(Icons.Rounded.SelectAll, contentDescription = "Select All", tint = MaterialTheme.colorScheme.primary)
                         }
                         IconButton(
                             enabled = selectedKeys.isNotEmpty(),
@@ -358,7 +346,7 @@ fun BlacklistWhitelistScreen(
                     } else {
                         Box {
                             IconButton(onClick = { showSortMenu = true }) {
-                                Icon(Icons.Rounded.Sort, contentDescription = "Sort Rules")
+                                Icon(Icons.Rounded.Sort, contentDescription = "Sort Rules", tint = MaterialTheme.colorScheme.primary)
                             }
                             DropdownMenu(
                                 expanded = showSortMenu,
@@ -403,6 +391,8 @@ fun BlacklistWhitelistScreen(
             // Blacklist / Whitelist Primary Tabs
             TabRow(
                 selectedTabIndex = selectedTab,
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.primary,
                 divider = {}
             ) {
                 val blCount = blacklistEntries.size + folderRules.count { it.listKind == RuleListKind.BLACKLIST }
@@ -465,20 +455,12 @@ fun BlacklistWhitelistScreen(
 
                 // Two Prominent Direct Folder Selection Options
                 item {
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
+                    CassetteSectionCard {
                         Column(
                             modifier = Modifier.padding(14.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Text(
-                                text = "DIRECT FOLDER SELECTION",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                            CassetteSectionHeader(title = "Direct Folder Selection")
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -596,36 +578,11 @@ fun BlacklistWhitelistScreen(
                 // Entries List
                 if (filteredAndSorted.isEmpty()) {
                     item {
-                        Surface(
-                            shape = RoundedCornerShape(20.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(28.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (selectedTab == 0) Icons.Rounded.FolderOff else Icons.Rounded.RuleFolder,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(44.dp)
-                                )
-                                Text(
-                                    text = "No ${selectedCategory.label} Rules Found",
-                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                                )
-                                Text(
-                                    text = "Use the folder picker above to select internal or SD card folders directly, or long-press items in Library and Files.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                )
-                            }
-                        }
+                        CassetteEmptyStateCard(
+                            icon = if (selectedTab == 0) Icons.Rounded.FolderOff else Icons.Rounded.RuleFolder,
+                            title = "No ${selectedCategory.label} Rules Found",
+                            subtitle = "Use the folder picker above to select internal or SD card folders directly, or long-press items in Library and Files."
+                        )
                     }
                 } else {
                     items(filteredAndSorted, key = { it.uniqueKey }) { item ->

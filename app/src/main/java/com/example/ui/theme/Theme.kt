@@ -12,9 +12,10 @@ enum class ThemeMode {
 }
 
 enum class AccentColor(val displayName: String, val color: Color) {
+    GOLD("Golden Cassette", SangeetGold),
+    AMBER("Neon Amber", NeonAmber),
     CYAN("Sangeet Cyan", SangeetCyan),
     VIOLET("Royal Violet", RoyalViolet),
-    AMBER("Neon Amber", NeonAmber),
     EMERALD("Emerald Green", EmeraldGreen),
     ROSE("Electric Rose", ElectricRose)
 }
@@ -31,35 +32,42 @@ fun createSangeetColorScheme(
     }
 
     val isAmoled = themeMode == ThemeMode.AMOLED
+    val secondaryGold = if (accent == AccentColor.GOLD || accent == AccentColor.AMBER) {
+        SangeetGoldBright
+    } else {
+        accent.color.copy(alpha = 0.85f)
+    }
 
     return if (isDark) {
         val bg = if (isAmoled) AmoledBlack else DarkBackground
-        val surface = if (isAmoled) Color(0xFF070707) else DarkSurface
-        val surfaceContainer = if (isAmoled) Color(0xFF101010) else DarkSurfaceElevated
+        val surface = if (isAmoled) CassetteSurfaceDark else DarkSurface
+        val surfaceContainer = if (isAmoled) CassetteCardSurface else DarkSurfaceElevated
 
         darkColorScheme(
             primary = accent.color,
             onPrimary = Color.Black,
-            primaryContainer = accent.color.copy(alpha = 0.2f),
+            primaryContainer = accent.color.copy(alpha = 0.18f),
             onPrimaryContainer = accent.color,
-            secondary = accent.color.copy(alpha = 0.8f),
+            secondary = secondaryGold,
             onSecondary = Color.Black,
+            secondaryContainer = accent.color.copy(alpha = 0.14f),
+            onSecondaryContainer = secondaryGold,
             background = bg,
             onBackground = TextPrimaryDark,
             surface = surface,
             onSurface = TextPrimaryDark,
             surfaceVariant = surfaceContainer,
             onSurfaceVariant = TextSecondaryDark,
-            outline = if (isAmoled) Color(0xFF222222) else DarkSurfaceBorder
+            outline = if (isAmoled) CassetteBorderGold else DarkSurfaceBorder
         )
     } else {
         lightColorScheme(
             primary = accent.color,
-            onPrimary = Color.White,
+            onPrimary = Color.Black,
             primaryContainer = accent.color.copy(alpha = 0.15f),
             onPrimaryContainer = Color.Black,
             secondary = accent.color.copy(alpha = 0.8f),
-            onSecondary = Color.White,
+            onSecondary = Color.Black,
             background = LightBackground,
             onBackground = TextPrimaryLight,
             surface = LightSurface,
@@ -74,7 +82,7 @@ fun createSangeetColorScheme(
 @Composable
 fun SangeetTheme(
     themeMode: ThemeMode = ThemeMode.AMOLED,
-    accentColor: AccentColor = AccentColor.CYAN,
+    accentColor: AccentColor = AccentColor.GOLD,
     content: @Composable () -> Unit
 ) {
     val isSystemDark = isSystemInDarkTheme()

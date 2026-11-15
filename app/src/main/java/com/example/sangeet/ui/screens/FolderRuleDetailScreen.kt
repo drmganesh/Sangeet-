@@ -27,7 +27,13 @@ import com.example.sangeet.data.model.*
 import com.example.sangeet.data.repository.MediaRepository
 import com.example.sangeet.data.rules.StoragePathHelper
 import com.example.sangeet.scanner.FolderInspectionResult
+import com.example.sangeet.ui.components.CassetteEmptyStateCard
+import com.example.sangeet.ui.components.CassetteSectionCard
+import com.example.sangeet.ui.components.CassetteSectionHeader
+import com.example.sangeet.ui.components.CassetteTopBar
 import com.example.sangeet.ui.components.FolderConfirmationDialog
+import com.example.sangeet.ui.components.MiniCassetteArtwork
+import com.example.sangeet.ui.components.VideoRetroThumbCard
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -120,13 +126,10 @@ fun FolderRuleDetailScreen(
     if (currentRule == null) {
         Scaffold(
             topBar = {
-                TopAppBar(
-                    title = { Text("Folder Details") },
-                    navigationIcon = {
-                        IconButton(onClick = onNavigateBack) {
-                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
-                        }
-                    }
+                CassetteTopBar(
+                    title = "Folder Details",
+                    badgeText = "FOLDER",
+                    onNavigateBack = onNavigateBack
                 )
             }
         ) { innerPadding ->
@@ -169,20 +172,11 @@ fun FolderRuleDetailScreen(
             .fillMaxSize()
             .testTag("folder_detail_screen"),
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = currentRule.displayName,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
-                    }
-                },
+            CassetteTopBar(
+                title = currentRule.displayName,
+                subtitle = currentRule.ruleType.displayName,
+                badgeText = if (currentRule.listKind == RuleListKind.BLACKLIST) "BLACKLIST" else "WHITELIST",
+                onNavigateBack = onNavigateBack,
                 actions = {
                     IconButton(
                         onClick = {
@@ -194,7 +188,7 @@ fun FolderRuleDetailScreen(
                             }
                         }
                     ) {
-                        Icon(Icons.Rounded.Refresh, contentDescription = "Rescan Folder")
+                        Icon(Icons.Rounded.Refresh, contentDescription = "Rescan Folder", tint = MaterialTheme.colorScheme.primary)
                     }
                     IconButton(onClick = { showRemoveConfirm = true }) {
                         Icon(Icons.Rounded.DeleteOutline, contentDescription = "Remove Rule", tint = MaterialTheme.colorScheme.error)
@@ -251,11 +245,7 @@ fun FolderRuleDetailScreen(
 
             // Main Summary Card
             item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                CassetteSectionCard(highlighted = true) {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -422,40 +412,32 @@ fun FolderRuleDetailScreen(
 
             // Matching Audio Files Preview
             item {
-                Text(
-                    text = "MATCHING MEDIA FILES (${matchingAudio.size + matchingVideos.size})",
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-                    color = MaterialTheme.colorScheme.primary
+                CassetteSectionHeader(
+                    title = "Matching Media Files",
+                    badgeText = "${matchingAudio.size + matchingVideos.size}"
                 )
             }
 
             if (matchingAudio.isEmpty() && matchingVideos.isEmpty()) {
                 item {
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = "No indexed media files currently matched inside this folder.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(16.dp)
-                        )
-                    }
+                    CassetteEmptyStateCard(
+                        icon = Icons.Rounded.FolderOpen,
+                        title = "No Matched Media Yet",
+                        subtitle = "No indexed media files currently matched inside this folder."
+                    )
                 }
             } else {
                 items(matchingAudio.take(50), key = { "a_${it.id}" }) { track ->
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
+                    CassetteSectionCard {
                         Row(
                             modifier = Modifier.padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Rounded.MusicNote, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            MiniCassetteArtwork(
+                                track = track,
+                                isPlaying = false,
+                                modifier = Modifier.height(34.dp)
+                            )
                             Spacer(Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(track.title, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold), maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -465,16 +447,15 @@ fun FolderRuleDetailScreen(
                     }
                 }
                 items(matchingVideos.take(50), key = { "v_${it.id}" }) { video ->
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
+                    CassetteSectionCard {
                         Row(
                             modifier = Modifier.padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Rounded.Movie, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                            VideoRetroThumbCard(
+                                video = video,
+                                modifier = Modifier.size(width = 56.dp, height = 36.dp)
+                            )
                             Spacer(Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(video.title, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold), maxLines = 1, overflow = TextOverflow.Ellipsis)

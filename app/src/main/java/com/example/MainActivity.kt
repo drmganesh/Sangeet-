@@ -12,6 +12,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -37,12 +38,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.sangeet.data.model.AudioTrack
+import com.example.sangeet.data.model.CassetteStyle
 import com.example.sangeet.data.model.VideoTrack
 import com.example.sangeet.data.repository.MediaRepository
 import com.example.sangeet.data.repository.SettingsRepository
 import com.example.sangeet.playback.PlaybackManager
 import com.example.sangeet.playback.PlaybackService
 import com.example.sangeet.ui.components.ArtworkAnimationPreferencesSnapshot
+import com.example.sangeet.ui.components.LocalCassetteStyle
 import com.example.sangeet.ui.components.MiniPlayer
 import com.example.sangeet.ui.screens.*
 import com.example.sangeet.ui.screens.player.PlayerContainer
@@ -57,6 +60,13 @@ enum class MainNavTab(val title: String, val icon: ImageVector) {
     LIBRARY("Library", Icons.Rounded.LibraryMusic),
     FILES("Files", Icons.Rounded.FolderOpen),
     SETTINGS("Settings", Icons.Rounded.Settings)
+}
+
+sealed class LibraryRouteRequest {
+    data object None : LibraryRouteRequest()
+    data class OpenAlbum(val albumName: String, val nonce: Long = System.nanoTime()) : LibraryRouteRequest()
+    data class OpenArtist(val artistName: String, val nonce: Long = System.nanoTime()) : LibraryRouteRequest()
+    data class OpenPlaylist(val playlistId: Long, val playlistName: String, val nonce: Long = System.nanoTime()) : LibraryRouteRequest()
 }
 
 sealed class SubScreen {
@@ -90,24 +100,27 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val themeMode by settingsRepository.themeMode.collectAsState(initial = ThemeMode.AMOLED)
-            val accentColor by settingsRepository.accentColor.collectAsState(initial = AccentColor.CYAN)
+            val accentColor by settingsRepository.accentColor.collectAsState(initial = AccentColor.GOLD)
+            val activeCassetteStyle by playbackManager.cassetteStyle.collectAsState()
             val scope = rememberCoroutineScope()
 
-            SangeetTheme(themeMode = themeMode, accentColor = accentColor) {
-                SangeetApp(
-                    playbackManager = playbackManager,
-                    repository = mediaRepository,
-                    settingsRepository = settingsRepository,
-                    themeMode = themeMode,
-                    onThemeModeChanged = { newMode ->
-                        scope.launch { settingsRepository.setThemeMode(newMode) }
-                    },
-                    accentColor = accentColor,
-                    onAccentColorChanged = { newAccent ->
-                        scope.launch { settingsRepository.setAccentColor(newAccent) }
-                    },
-                    openPlayerSignal = openPlayerSignal
-                )
+            CompositionLocalProvider(LocalCassetteStyle provides activeCassetteStyle) {
+                SangeetTheme(themeMode = themeMode, accentColor = accentColor) {
+                    SangeetApp(
+                        playbackManager = playbackManager,
+                        repository = mediaRepository,
+                        settingsRepository = settingsRepository,
+                        themeMode = themeMode,
+                        onThemeModeChanged = { newMode ->
+                            scope.launch { settingsRepository.setThemeMode(newMode) }
+                        },
+                        accentColor = accentColor,
+                        onAccentColorChanged = { newAccent ->
+                            scope.launch { settingsRepository.setAccentColor(newAccent) }
+                        },
+                        openPlayerSignal = openPlayerSignal
+                    )
+                }
             }
         }
     }
@@ -149,6 +162,7 @@ fun SangeetApp(
     var currentTab by remember { mutableStateOf(MainNavTab.HOME) }
     var currentSubScreen by remember { mutableStateOf<SubScreen>(SubScreen.None) }
     var isPlayerExpanded by remember { mutableStateOf(false) }
+    var libraryRouteRequest by remember { mutableStateOf<LibraryRouteRequest>(LibraryRouteRequest.None) }
 
     LaunchedEffect(openPlayerSignal) {
         if (openPlayerSignal > 0 && playbackManager.currentTrack.value != null) {
@@ -316,12 +330,16 @@ fun SangeetApp(
                                 }
                             }
                         } else {
-                            // Expressive Floating Pill Navigation Bar
+                            // Expressive Floating Pill Cassette Navigation Bar
                             Surface(
                                 shape = RoundedCornerShape(26.dp),
                                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                                border = BorderStroke(
+                                    0.9.dp,
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)
+                                ),
                                 tonalElevation = 8.dp,
-                                shadowElevation = 10.dp,
+                                shadowElevation = 12.dp,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 16.dp, vertical = 6.dp)
@@ -403,15 +421,41 @@ fun SangeetApp(
                     repository = repository,
                     onNavigateToEqualizer = { currentSubScreen = SubScreen.Equalizer },
                     onNavigateToSpatial = { currentSubScreen = SubScreen.SpatialAudio },
-                    onNavigateToLibrary = { currentTab = MainNavTab.LIBRARY }
+                    onNavigateToLibrary = { currentTab = MainNavTab.LIBRARY },
+                    onOpenArtist = { artistName ->
+                        libraryRouteRequest = LibraryRouteRequest.OpenArtist(artistName)
+                        currentTab = MainNavTab.LIBRARY
+                    },
+                    onOpenAlbum = { albumName ->
+                        libraryRouteRequest = LibraryRouteRequest.OpenAlbum(albumName)
+                        currentTab = MainNavTab.LIBRARY
+                    },
+                    onOpenPlaylist = { playlistId, playlistName ->
+                        libraryRouteRequest = LibraryRouteRequest.OpenPlaylist(playlistId, playlistName)
+                        currentTab = MainNavTab.LIBRARY
+                    }
                 )
                 MainNavTab.SEARCH -> SearchScreen(
                     playbackManager = playbackManager,
-                    repository = repository
+                    repository = repository,
+                    onOpenAlbum = { albumName ->
+                        libraryRouteRequest = LibraryRouteRequest.OpenAlbum(albumName)
+                        currentTab = MainNavTab.LIBRARY
+                    },
+                    onOpenArtist = { artistName ->
+                        libraryRouteRequest = LibraryRouteRequest.OpenArtist(artistName)
+                        currentTab = MainNavTab.LIBRARY
+                    },
+                    onOpenPlaylist = { playlistId, playlistName ->
+                        libraryRouteRequest = LibraryRouteRequest.OpenPlaylist(playlistId, playlistName)
+                        currentTab = MainNavTab.LIBRARY
+                    }
                 )
                 MainNavTab.LIBRARY -> LibraryScreen(
                     playbackManager = playbackManager,
-                    repository = repository
+                    repository = repository,
+                    routeRequest = libraryRouteRequest,
+                    onRouteRequestConsumed = { libraryRouteRequest = LibraryRouteRequest.None }
                 )
                 MainNavTab.FILES -> FilesScreen(
                     playbackManager = playbackManager,

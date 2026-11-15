@@ -14,6 +14,7 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
@@ -35,6 +36,7 @@ import androidx.media3.ui.PlayerView
 import com.example.sangeet.data.model.VideoTrack
 import com.example.sangeet.data.repository.MediaRepository
 import com.example.sangeet.playback.PlaybackManager
+import com.example.sangeet.ui.components.CassetteHeaderBadge
 import com.example.sangeet.ui.screens.player.formatMs
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -218,16 +220,22 @@ fun VideoPlayerScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = onClose) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Close", tint = Color.White)
+                    IconButton(
+                        onClick = onClose,
+                        modifier = Modifier.minimumInteractiveComponentSize()
+                    ) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Close", tint = Color(0xFFFFD666))
                     }
-                    Text(
-                        text = video.title,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = Color.White,
-                        modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
-                        maxLines = 1
-                    )
+                    Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                        CassetteHeaderBadge(text = "${video.resolution} • OFFLINE VIDEO")
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = video.title,
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = Color.White,
+                            maxLines = 1
+                        )
+                    }
                     // Speed toggle
                     TextButton(onClick = {
                         playbackSpeed = when (playbackSpeed) {
@@ -239,7 +247,7 @@ fun VideoPlayerScreen(
                         }
                         videoPlayer.setPlaybackSpeed(playbackSpeed)
                     }) {
-                        Text("${playbackSpeed}x", color = Color.White, fontWeight = FontWeight.Bold)
+                        Text("${playbackSpeed}x", color = Color(0xFFFFD666), fontWeight = FontWeight.Bold)
                     }
                 }
 
@@ -259,7 +267,7 @@ fun VideoPlayerScreen(
                     Icon(
                         imageVector = if (isPlaying) Icons.Rounded.PauseCircle else Icons.Rounded.PlayCircle,
                         contentDescription = "Play/Pause",
-                        tint = Color.White,
+                        tint = Color(0xFFFFD666),
                         modifier = Modifier.size(64.dp)
                     )
                 }
