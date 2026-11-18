@@ -124,13 +124,17 @@ fun MiniPlayer(
     onNext: () -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onPrevious: () -> Unit = {},
+    onOpenLyrics: (() -> Unit)? = null,
+    onSwipeDownCollapse: () -> Unit = {},
     animationPrefs: ArtworkAnimationPreferencesSnapshot = ArtworkAnimationPreferencesSnapshot()
 ) {
     if (currentTrack == null) return
 
+    val globalMotion = com.example.sangeet.ui.motion.LocalSangeetMotion.current
     val motion = rememberEffectiveArtworkMotion(animationPrefs)
     val isAppResumed by rememberIsAppResumed()
-    val shouldBreathe = isPlaying && isAppResumed && motion.cardBreathingActive
+    val shouldBreathe = isPlaying && isAppResumed && motion.cardBreathingActive && globalMotion.decorativeAnimationsEnabled
 
     val breathingScale: Float = if (shouldBreathe) {
         val transition = rememberInfiniteTransition(label = "mini_art_breathe")
@@ -149,19 +153,30 @@ fun MiniPlayer(
     }
 
     val glowAlpha by animateFloatAsState(
-        targetValue = if (isPlaying && motion.isEnabled) 0.55f else 0f,
-        animationSpec = tween(durationMillis = 320),
+        targetValue = if (isPlaying && motion.isEnabled && globalMotion.isMotionEnabled) 0.55f else 0f,
+        animationSpec = globalMotion.durationTween(300),
         label = "miniGlowAlpha"
     )
 
     val activeCassetteStyle = LocalCassetteStyle.current
     val cassettePalette = remember(activeCassetteStyle) { activeCassetteStyle.palette() }
+    val showCassetteAnim = motion.trackTransitionsActive && globalMotion.allowCassetteTransitions
 
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 6.dp)
-            .shadow(14.dp, RoundedCornerShape(18.dp))
+            .then(
+                with(com.example.sangeet.ui.motion.ModifierGestureScope) {
+                    Modifier.applyMiniPlayerGestures(
+                        onSwipeLeftNext = onNext,
+                        onSwipeRightPrevious = onPrevious,
+                        onSwipeUpExpand = onClick,
+                        onSwipeDownCollapse = onSwipeDownCollapse
+                    )
+                }
+            )
+            .shadow(if (globalMotion.isReducedMotion) 4.dp else 14.dp, RoundedCornerShape(18.dp))
             .clip(RoundedCornerShape(18.dp))
             .testTag("mini_player"),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f),
@@ -191,7 +206,7 @@ fun MiniPlayer(
             ) {
                 // Synchronized Miniature Cassette Artwork (rotates reels cleanly while playing)
                 val miniReelAngle by rememberVisibleCassetteReelAngle(
-                    isActivelyPlayingAndVisible = isPlaying && isAppResumed && motion.isEnabled
+                    isActivelyPlayingAndVisible = isPlaying && isAppResumed && globalMotion.isMotionEnabled
                 )
                 Box(
                     modifier = Modifier
@@ -214,18 +229,19 @@ fun MiniPlayer(
                         targetState = currentTrack,
                         contentKey = { it.id },
                         transitionSpec = {
-                            if (motion.trackTransitionsActive && motion.transitionDurationMs > 0) {
+                            val dur = globalMotion.cassetteTransitionMs
+                            if (showCassetteAnim && dur > 0) {
                                 (fadeIn(
-                                    animationSpec = tween(motion.transitionDurationMs, easing = FastOutSlowInEasing)
+                                    animationSpec = tween(dur, easing = FastOutSlowInEasing)
                                 ) + scaleIn(
                                     initialScale = 0.88f,
-                                    animationSpec = tween(motion.transitionDurationMs, easing = FastOutSlowInEasing)
+                                    animationSpec = tween(dur, easing = FastOutSlowInEasing)
                                 )).togetherWith(
                                     fadeOut(
-                                        animationSpec = tween((motion.transitionDurationMs * 0.7f).toInt())
+                                        animationSpec = tween((dur * 0.7f).toInt())
                                     ) + scaleOut(
                                         targetScale = 0.92f,
-                                        animationSpec = tween((motion.transitionDurationMs * 0.7f).toInt())
+                                        animationSpec = tween((dur * 0.7f).toInt())
                                     )
                                 )
                             } else {
@@ -238,7 +254,7 @@ fun MiniPlayer(
                             track = targetTrack,
                             isPlaying = isPlaying && isAppResumed,
                             reelAngleDegrees = miniReelAngle,
-                            crossfadeDurationMs = if (motion.trackTransitionsActive) motion.transitionDurationMs else 0,
+                            crossfadeDurationMs = if (showCassetteAnim) globalMotion.cassetteTransitionMs else 0,
                             modifier = Modifier
                                 .height(44.dp)
                                 .testTag("mini_player_cassette_artwork")
@@ -248,25 +264,57 @@ fun MiniPlayer(
 
                 Spacer(modifier = Modifier.width(12.dp))
 
-                // Title and Artist
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = currentTrack.title,
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "${currentTrack.artist} • ${currentTrack.album}",
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                // Title and Artist (Animated softly across track switches)
+                AnimatedContent(
+                    targetState = currentTrack,
+                    contentKey = { it.id },
+                    transitionSpec = {
+                        val dur = globalMotion.cassetteTransitionMs
+                        if (showCassetteAnim && dur > 0) {
+                            (fadeIn(tween(dur)) + slideInHorizontally(tween(dur)) { it / 6 })
+                                .togetherWith(fadeOut(tween((dur * 0.65f).toInt())))
+                        } else {
+                            EnterTransition.None togetherWith ExitTransition.None
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                    label = "mini_player_text"
+                ) { shownTrack ->
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = shownTrack.title,
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "${shownTrack.artist} • ${shownTrack.album}",
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
 
                 // Controls
+                if (onOpenLyrics != null) {
+                    IconButton(
+                        onClick = onOpenLyrics,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .testTag("mini_player_lyrics_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Lyrics,
+                            contentDescription = "Open Full-Screen Lyrics",
+                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+
                 IconButton(
                     onClick = onTogglePlayPause,
                     modifier = Modifier

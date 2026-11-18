@@ -23,6 +23,9 @@ import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,6 +40,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.lifecycleScope
 import com.example.sangeet.data.model.AudioTrack
 import com.example.sangeet.data.model.CassetteStyle
 import com.example.sangeet.data.model.VideoTrack
@@ -45,13 +50,23 @@ import com.example.sangeet.data.repository.SettingsRepository
 import com.example.sangeet.playback.PlaybackManager
 import com.example.sangeet.playback.PlaybackService
 import com.example.sangeet.ui.components.ArtworkAnimationPreferencesSnapshot
+import com.example.sangeet.ui.components.ArtworkMotionPlanner
 import com.example.sangeet.ui.components.LocalCassetteStyle
 import com.example.sangeet.ui.components.MiniPlayer
+import com.example.sangeet.ui.components.rememberIsAppResumed
+import com.example.sangeet.ui.motion.GlobalMotionPlanner
+import com.example.sangeet.ui.motion.LocalSangeetMotion
+import com.example.sangeet.ui.motion.MotionPreferencesSnapshot
 import com.example.sangeet.ui.screens.*
+import com.example.sangeet.ui.screens.player.FullScreenLyricsScreen
 import com.example.sangeet.ui.screens.player.PlayerContainer
+import com.example.sangeet.ui.startup.StartupAnimationPreferencesSnapshot
+import com.example.sangeet.ui.startup.StartupAnimationStyle
+import com.example.sangeet.ui.startup.WalkmanStartupOverlay
 import com.example.ui.theme.AccentColor
 import com.example.ui.theme.SangeetTheme
 import com.example.ui.theme.ThemeMode
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 enum class MainNavTab(val title: String, val icon: ImageVector) {
@@ -76,6 +91,11 @@ sealed class SubScreen {
     data object HomeNavSettings : SubScreen()
     data object NotificationSettings : SubScreen()
     data object ArtworkAnimationSettings : SubScreen()
+    data object Profile : SubScreen()
+    data object FullScreenLyrics : SubScreen()
+    data class LyricsSettings(val openedFromFullScreenLyrics: Boolean = false) : SubScreen()
+    data object CrossfadeSettings : SubScreen()
+    data object AboutSangeet : SubScreen()
     data class BlacklistWhitelist(val initialTab: Int = 0) : SubScreen()
     data class VideoPlayer(val video: VideoTrack) : SubScreen()
 }
@@ -87,6 +107,7 @@ class MainActivity : ComponentActivity() {
     private var openPlayerSignal by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val splashScreen = installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
@@ -94,7 +115,27 @@ class MainActivity : ComponentActivity() {
         mediaRepository = MediaRepository(applicationContext)
         val settingsRepository = SettingsRepository.getInstance(applicationContext)
 
-        if (intent?.getBooleanExtra(PlaybackService.EXTRA_OPEN_PLAYER, false) == true) {
+        var startupPrefsLoaded by mutableStateOf(false)
+        var initialStartupPrefs by mutableStateOf(StartupAnimationPreferencesSnapshot())
+
+        splashScreen.setKeepOnScreenCondition { !startupPrefsLoaded }
+        splashScreen.setOnExitAnimationListener { splashProvider ->
+            splashProvider.view.animate()
+                .alpha(0f)
+                .setDuration(150L)
+                .withEndAction { splashProvider.remove() }
+                .start()
+        }
+
+        lifecycleScope.launch {
+            initialStartupPrefs = runCatching {
+                settingsRepository.startupAnimationPreferences.first()
+            }.getOrDefault(StartupAnimationPreferencesSnapshot())
+            startupPrefsLoaded = true
+        }
+
+        val launchedFromNotification = intent?.getBooleanExtra(PlaybackService.EXTRA_OPEN_PLAYER, false) == true
+        if (launchedFromNotification) {
             openPlayerSignal++
         }
 
@@ -102,24 +143,78 @@ class MainActivity : ComponentActivity() {
             val themeMode by settingsRepository.themeMode.collectAsState(initial = ThemeMode.AMOLED)
             val accentColor by settingsRepository.accentColor.collectAsState(initial = AccentColor.GOLD)
             val activeCassetteStyle by playbackManager.cassetteStyle.collectAsState()
+            val motionPrefs by settingsRepository.motionPreferences.collectAsState(initial = MotionPreferencesSnapshot())
+            val isAppResumed by rememberIsAppResumed()
+            val ctx = LocalContext.current
+            val systemAnimatorsEnabled = remember(ctx, isAppResumed) {
+                ArtworkMotionPlanner.isSystemAnimationEnabled(ctx)
+            }
+            val effectiveMotion = remember(motionPrefs, systemAnimatorsEnabled) {
+                GlobalMotionPlanner.compute(motionPrefs, systemAnimatorsEnabled)
+            }
             val scope = rememberCoroutineScope()
 
-            CompositionLocalProvider(LocalCassetteStyle provides activeCassetteStyle) {
+            CompositionLocalProvider(
+                LocalCassetteStyle provides activeCassetteStyle,
+                LocalSangeetMotion provides effectiveMotion
+            ) {
                 SangeetTheme(themeMode = themeMode, accentColor = accentColor) {
-                    SangeetApp(
-                        playbackManager = playbackManager,
-                        repository = mediaRepository,
-                        settingsRepository = settingsRepository,
-                        themeMode = themeMode,
-                        onThemeModeChanged = { newMode ->
-                            scope.launch { settingsRepository.setThemeMode(newMode) }
-                        },
-                        accentColor = accentColor,
-                        onAccentColorChanged = { newAccent ->
-                            scope.launch { settingsRepository.setAccentColor(newAccent) }
-                        },
-                        openPlayerSignal = openPlayerSignal
-                    )
+                    if (!startupPrefsLoaded) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black)
+                        )
+                    } else {
+                        val startupPrefs by settingsRepository.startupAnimationPreferences.collectAsState(
+                            initial = initialStartupPrefs
+                        )
+                        var hasCompletedStartupIntro by rememberSaveable {
+                            mutableStateOf(
+                                initialStartupPrefs.style == StartupAnimationStyle.DISABLED ||
+                                    launchedFromNotification
+                            )
+                        }
+                        var isPreviewStartup by remember { mutableStateOf(false) }
+
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            SangeetApp(
+                                playbackManager = playbackManager,
+                                repository = mediaRepository,
+                                settingsRepository = settingsRepository,
+                                themeMode = themeMode,
+                                onThemeModeChanged = { newMode ->
+                                    scope.launch { settingsRepository.setThemeMode(newMode) }
+                                },
+                                accentColor = accentColor,
+                                onAccentColorChanged = { newAccent ->
+                                    scope.launch { settingsRepository.setAccentColor(newAccent) }
+                                },
+                                onPreviewStartupAnimation = {
+                                    isPreviewStartup = true
+                                },
+                                openPlayerSignal = openPlayerSignal
+                            )
+
+                            val shouldShowStartup =
+                                isPreviewStartup || (!hasCompletedStartupIntro && openPlayerSignal == 0)
+
+                            if (shouldShowStartup) {
+                                WalkmanStartupOverlay(
+                                    preferences = startupPrefs,
+                                    isPreview = isPreviewStartup,
+                                    isNotificationPlayerLaunch = openPlayerSignal > 0 && !isPreviewStartup,
+                                    onFinished = {
+                                        if (isPreviewStartup) {
+                                            isPreviewStartup = false
+                                        } else {
+                                            hasCompletedStartupIntro = true
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -143,6 +238,7 @@ fun SangeetApp(
     onThemeModeChanged: (ThemeMode) -> Unit,
     accentColor: AccentColor,
     onAccentColorChanged: (AccentColor) -> Unit,
+    onPreviewStartupAnimation: () -> Unit = {},
     openPlayerSignal: Int = 0
 ) {
     val context = LocalContext.current
@@ -158,15 +254,19 @@ fun SangeetApp(
     val artworkAnimPrefs by settingsRepository.artworkAnimationPreferences.collectAsState(
         initial = ArtworkAnimationPreferencesSnapshot()
     )
+    val sangeetMotion = LocalSangeetMotion.current
+    val tabStateHolder = rememberSaveableStateHolder()
 
-    var currentTab by remember { mutableStateOf(MainNavTab.HOME) }
+    var currentTab by rememberSaveable { mutableStateOf(MainNavTab.HOME) }
     var currentSubScreen by remember { mutableStateOf<SubScreen>(SubScreen.None) }
-    var isPlayerExpanded by remember { mutableStateOf(false) }
+    var isPlayerExpanded by rememberSaveable { mutableStateOf(false) }
+    var isMiniPlayerCollapsed by rememberSaveable { mutableStateOf(false) }
     var libraryRouteRequest by remember { mutableStateOf<LibraryRouteRequest>(LibraryRouteRequest.None) }
 
     LaunchedEffect(openPlayerSignal) {
         if (openPlayerSignal > 0 && playbackManager.currentTrack.value != null) {
             currentSubScreen = SubScreen.None
+            isMiniPlayerCollapsed = false
             isPlayerExpanded = true
         }
     }
@@ -206,6 +306,13 @@ fun SangeetApp(
     val isPlaying by playbackManager.isPlaying.collectAsState()
     val positionMs by playbackManager.currentPositionMs.collectAsState()
     val durationMs by playbackManager.durationMs.collectAsState()
+
+    // Automatically re-surface mini-player when track changes cleanly
+    LaunchedEffect(currentTrack?.id) {
+        if (currentTrack != null) {
+            isMiniPlayerCollapsed = false
+        }
+    }
 
     // Hide while scrolling nested scroll listener
     var isNavVisible by remember { mutableStateOf(true) }
@@ -261,22 +368,34 @@ fun SangeetApp(
 
     // Back handling for sub-screens and full player
     BackHandler(enabled = isPlayerExpanded || currentSubScreen != SubScreen.None) {
-        if (isPlayerExpanded) {
-            isPlayerExpanded = false
-        } else if (currentSubScreen != SubScreen.None) {
-            currentSubScreen = SubScreen.None
+        val activeSub = currentSubScreen
+        when {
+            activeSub is SubScreen.LyricsSettings && activeSub.openedFromFullScreenLyrics -> {
+                currentSubScreen = SubScreen.FullScreenLyrics
+            }
+            activeSub != SubScreen.None -> {
+                currentSubScreen = SubScreen.None
+            }
+            isPlayerExpanded -> {
+                isPlayerExpanded = false
+            }
         }
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
             .nestedScroll(nestedScrollConnection),
         bottomBar = {
             if (!isPlayerExpanded && currentSubScreen == SubScreen.None) {
-                Column {
-                    // Persistent Mini Player above bottom navigation
-                    if (currentTrack != null) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    // Persistent Mini Player above bottom navigation (swipe left/right prev/next, up expand, down collapse)
+                    AnimatedVisibility(
+                        visible = currentTrack != null && !isMiniPlayerCollapsed,
+                        enter = sangeetMotion.miniPlayerEnter(),
+                        exit = sangeetMotion.miniPlayerExit()
+                    ) {
                         val progress = if (durationMs > 0) (positionMs.toFloat() / durationMs) else 0f
                         MiniPlayer(
                             currentTrack = currentTrack,
@@ -284,16 +403,65 @@ fun SangeetApp(
                             progress = progress,
                             onTogglePlayPause = { playbackManager.togglePlayPause() },
                             onNext = { playbackManager.playNext() },
+                            onPrevious = { playbackManager.skipToPrevious(forcePreviousTrack = true) },
+                            onOpenLyrics = {
+                                isMiniPlayerCollapsed = false
+                                currentSubScreen = SubScreen.FullScreenLyrics
+                            },
+                            onSwipeDownCollapse = { isMiniPlayerCollapsed = true },
                             onClick = { isPlayerExpanded = true },
                             animationPrefs = artworkAnimPrefs
                         )
                     }
 
+                    // Compact floating cassette pill when user swiped down to collapse Mini-Player (audio stays playing!)
+                    AnimatedVisibility(
+                        visible = currentTrack != null && isMiniPlayerCollapsed,
+                        enter = sangeetMotion.miniPlayerEnter(),
+                        exit = sangeetMotion.miniPlayerExit()
+                    ) {
+                        Surface(
+                            onClick = { isMiniPlayerCollapsed = false },
+                            shape = RoundedCornerShape(999.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.94f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)),
+                            shadowElevation = 6.dp,
+                            modifier = Modifier
+                                .padding(bottom = 4.dp)
+                                .testTag("mini_player_restore_pill")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.KeyboardArrowUp,
+                                    contentDescription = "Restore Mini Player",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = currentTrack?.title ?: "Now Playing",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+
                     // Bottom Navigation Bar (Animated for hide on scroll)
                     AnimatedVisibility(
                         visible = isNavVisible,
-                        enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-                        exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
+                        enter = slideInVertically(
+                            animationSpec = sangeetMotion.intOffsetSpring(),
+                            initialOffsetY = { it }
+                        ) + fadeIn(sangeetMotion.durationTween(180)),
+                        exit = slideOutVertically(
+                            animationSpec = sangeetMotion.intOffsetSpring(),
+                            targetOffsetY = { it }
+                        ) + fadeOut(sangeetMotion.durationTween(160))
                     ) {
                         if (nonExpressiveNavBar) {
                             // Standard M3 Docked Navigation Bar
@@ -361,10 +529,20 @@ fun SangeetApp(
                                             "NEVER" -> false
                                             else -> true // AUTO
                                         }
+                                        val iconScale by animateFloatAsState(
+                                            targetValue = if (selected && sangeetMotion.isMotionEnabled) 1.12f else 1f,
+                                            animationSpec = sangeetMotion.floatSpring(),
+                                            label = "navIconScale_${tab.name}"
+                                        )
+                                        val pillColor by animateColorAsState(
+                                            targetValue = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                            animationSpec = sangeetMotion.durationTween(180),
+                                            label = "navPillColor_${tab.name}"
+                                        )
 
                                         Surface(
                                             shape = RoundedCornerShape(18.dp),
-                                            color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                            color = pillColor,
                                             modifier = Modifier
                                                 .weight(1f)
                                                 .clip(RoundedCornerShape(18.dp))
@@ -385,7 +563,12 @@ fun SangeetApp(
                                                     imageVector = tab.icon,
                                                     contentDescription = tab.title,
                                                     tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    modifier = Modifier.size(24.dp)
+                                                    modifier = Modifier
+                                                        .size(24.dp)
+                                                        .graphicsLayer {
+                                                            scaleX = iconScale
+                                                            scaleY = iconScale
+                                                        }
                                                 )
                                                 if (showLabel) {
                                                     Text(
@@ -414,14 +597,24 @@ fun SangeetApp(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Main Tab Content
-            when (currentTab) {
+            // Main Tab Content with directional transition & SaveableStateHolder preserving scroll state
+            AnimatedContent(
+                targetState = currentTab,
+                transitionSpec = {
+                    val direction = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+                    sangeetMotion.tabTransitionSpec<MainNavTab>(direction)
+                },
+                label = "main_nav_tab_content"
+            ) { activeTab ->
+                tabStateHolder.SaveableStateProvider(key = activeTab.name) {
+                    when (activeTab) {
                 MainNavTab.HOME -> HomeScreen(
                     playbackManager = playbackManager,
                     repository = repository,
                     onNavigateToEqualizer = { currentSubScreen = SubScreen.Equalizer },
                     onNavigateToSpatial = { currentSubScreen = SubScreen.SpatialAudio },
                     onNavigateToLibrary = { currentTab = MainNavTab.LIBRARY },
+                    onOpenProfile = { currentSubScreen = SubScreen.Profile },
                     onOpenArtist = { artistName ->
                         libraryRouteRequest = LibraryRouteRequest.OpenArtist(artistName)
                         currentTab = MainNavTab.LIBRARY
@@ -474,15 +667,21 @@ fun SangeetApp(
                     onNavigateToHomeNavSettings = { currentSubScreen = SubScreen.HomeNavSettings },
                     onNavigateToNotificationSettings = { currentSubScreen = SubScreen.NotificationSettings },
                     onNavigateToArtworkAnimationSettings = { currentSubScreen = SubScreen.ArtworkAnimationSettings },
-                    onNavigateToBlacklistWhitelist = { tab -> currentSubScreen = SubScreen.BlacklistWhitelist(tab) }
+                    onNavigateToBlacklistWhitelist = { tab -> currentSubScreen = SubScreen.BlacklistWhitelist(tab) },
+                    onNavigateToLyricsSettings = { currentSubScreen = SubScreen.LyricsSettings(openedFromFullScreenLyrics = false) },
+                    onNavigateToCrossfadeSettings = { currentSubScreen = SubScreen.CrossfadeSettings },
+                    onNavigateToAbout = { currentSubScreen = SubScreen.AboutSangeet },
+                    onPreviewStartupAnimation = onPreviewStartupAnimation
                 )
+                    }
+                }
             }
 
             // Sub-screen Overlays (Equalizer, Spatial Audio, Home & Nav Settings, Video Player)
             AnimatedVisibility(
                 visible = currentSubScreen is SubScreen.Equalizer,
-                enter = slideInVertically { it },
-                exit = slideOutVertically { it }
+                enter = sangeetMotion.subScreenEnter(),
+                exit = sangeetMotion.subScreenExit()
             ) {
                 EqualizerScreen(
                     playbackManager = playbackManager,
@@ -492,9 +691,21 @@ fun SangeetApp(
             }
 
             AnimatedVisibility(
+                visible = currentSubScreen is SubScreen.Profile,
+                enter = sangeetMotion.subScreenEnter(),
+                exit = sangeetMotion.subScreenExit()
+            ) {
+                ProfileScreen(
+                    playbackManager = playbackManager,
+                    repository = repository,
+                    onNavigateBack = { currentSubScreen = SubScreen.None }
+                )
+            }
+
+            AnimatedVisibility(
                 visible = currentSubScreen is SubScreen.SpatialAudio,
-                enter = slideInVertically { it },
-                exit = slideOutVertically { it }
+                enter = sangeetMotion.subScreenEnter(),
+                exit = sangeetMotion.subScreenExit()
             ) {
                 SpatialAudioScreen(
                     playbackManager = playbackManager,
@@ -505,8 +716,8 @@ fun SangeetApp(
 
             AnimatedVisibility(
                 visible = currentSubScreen is SubScreen.HomeNavSettings,
-                enter = slideInVertically { it },
-                exit = slideOutVertically { it }
+                enter = sangeetMotion.subScreenEnter(),
+                exit = sangeetMotion.subScreenExit()
             ) {
                 HomeNavSettingsScreen(
                     onNavigateBack = { currentSubScreen = SubScreen.None }
@@ -515,8 +726,8 @@ fun SangeetApp(
 
             AnimatedVisibility(
                 visible = currentSubScreen is SubScreen.NotificationSettings,
-                enter = slideInVertically { it },
-                exit = slideOutVertically { it }
+                enter = sangeetMotion.subScreenEnter(),
+                exit = sangeetMotion.subScreenExit()
             ) {
                 NotificationSettingsScreen(
                     playbackManager = playbackManager,
@@ -526,8 +737,8 @@ fun SangeetApp(
 
             AnimatedVisibility(
                 visible = currentSubScreen is SubScreen.ArtworkAnimationSettings,
-                enter = slideInVertically { it },
-                exit = slideOutVertically { it }
+                enter = sangeetMotion.subScreenEnter(),
+                exit = sangeetMotion.subScreenExit()
             ) {
                 ArtworkAnimationSettingsScreen(
                     playbackManager = playbackManager,
@@ -537,8 +748,8 @@ fun SangeetApp(
 
             AnimatedVisibility(
                 visible = currentSubScreen is SubScreen.BlacklistWhitelist,
-                enter = slideInVertically { it },
-                exit = slideOutVertically { it }
+                enter = sangeetMotion.subScreenEnter(),
+                exit = sangeetMotion.subScreenExit()
             ) {
                 val blTab = (currentSubScreen as? SubScreen.BlacklistWhitelist)?.initialTab ?: 0
                 BlacklistWhitelistScreen(
@@ -549,9 +760,30 @@ fun SangeetApp(
             }
 
             AnimatedVisibility(
+                visible = currentSubScreen is SubScreen.CrossfadeSettings,
+                enter = sangeetMotion.subScreenEnter(),
+                exit = sangeetMotion.subScreenExit()
+            ) {
+                CrossfadeSettingsScreen(
+                    playbackManager = playbackManager,
+                    onNavigateBack = { currentSubScreen = SubScreen.None }
+                )
+            }
+
+            AnimatedVisibility(
+                visible = currentSubScreen is SubScreen.AboutSangeet,
+                enter = sangeetMotion.subScreenEnter(),
+                exit = sangeetMotion.subScreenExit()
+            ) {
+                AboutSangeetScreen(
+                    onNavigateBack = { currentSubScreen = SubScreen.None }
+                )
+            }
+
+            AnimatedVisibility(
                 visible = currentSubScreen is SubScreen.VideoPlayer,
-                enter = slideInVertically { it },
-                exit = slideOutVertically { it }
+                enter = sangeetMotion.playerEnter(),
+                exit = sangeetMotion.playerExit()
             ) {
                 val video = (currentSubScreen as? SubScreen.VideoPlayer)?.video
                 if (video != null) {
@@ -566,8 +798,8 @@ fun SangeetApp(
             // Fullscreen Audio Player Modal
             AnimatedVisibility(
                 visible = isPlayerExpanded,
-                enter = slideInVertically { it },
-                exit = slideOutVertically { it }
+                enter = sangeetMotion.playerEnter(),
+                exit = sangeetMotion.playerExit()
             ) {
                 PlayerContainer(
                     playbackManager = playbackManager,
@@ -579,9 +811,46 @@ fun SangeetApp(
                     onNavigateToSpatial = {
                         isPlayerExpanded = false
                         currentSubScreen = SubScreen.SpatialAudio
+                    },
+                    onOpenFullScreenLyrics = {
+                        currentSubScreen = SubScreen.FullScreenLyrics
+                    },
+                    onOpenCrossfadeSettings = {
+                        isPlayerExpanded = false
+                        currentSubScreen = SubScreen.CrossfadeSettings
                     }
                 )
             }
         }
+    }
+
+    // Edge-to-Edge Full-Screen Synchronized Lyrics Player
+    AnimatedVisibility(
+        visible = currentSubScreen is SubScreen.FullScreenLyrics,
+        enter = sangeetMotion.playerEnter(),
+        exit = sangeetMotion.playerExit()
+    ) {
+        FullScreenLyricsScreen(
+            playbackManager = playbackManager,
+            onClose = { currentSubScreen = SubScreen.None },
+            onOpenLyricsSettings = {
+                currentSubScreen = SubScreen.LyricsSettings(openedFromFullScreenLyrics = true)
+            }
+        )
+    }
+
+    // Edge-to-Edge Lyrics Appearance Customization Screen
+    AnimatedVisibility(
+        visible = currentSubScreen is SubScreen.LyricsSettings,
+        enter = sangeetMotion.subScreenEnter(),
+        exit = sangeetMotion.subScreenExit()
+    ) {
+        val fromLyrics = (currentSubScreen as? SubScreen.LyricsSettings)?.openedFromFullScreenLyrics == true
+        LyricsSettingsScreen(
+            onNavigateBack = {
+                currentSubScreen = if (fromLyrics) SubScreen.FullScreenLyrics else SubScreen.None
+            }
+        )
+    }
     }
 }

@@ -32,18 +32,21 @@ import androidx.compose.ui.unit.sp
 import com.example.sangeet.data.model.AudioTrack
 import com.example.sangeet.data.repository.MediaRepository
 import com.example.sangeet.data.repository.SettingsRepository
+import com.example.sangeet.data.repository.UserProfileSnapshot
 import com.example.sangeet.playback.PlaybackManager
 import com.example.sangeet.ui.components.AnimatedArtistCard
 import com.example.sangeet.ui.components.AnimatedFeaturedSpotlightCard
 import com.example.sangeet.ui.components.AnimatedQuickPickCard
 import com.example.sangeet.ui.components.ArtworkAnimationPreferencesSnapshot
+import com.example.sangeet.ui.components.ArtworkMotionPlanner
 import com.example.sangeet.ui.components.CassetteArtworkCard
 import com.example.sangeet.ui.components.CassetteEmptyStateCard
 import com.example.sangeet.ui.components.MiniCassetteArtwork
 import com.example.sangeet.ui.components.rememberCarouselBreathingPhase
-import com.example.sangeet.ui.components.rememberEffectiveArtworkMotion
 import com.example.sangeet.ui.components.rememberIsAppResumed
 import com.example.sangeet.ui.components.rememberVisibleCassetteReelAngle
+import com.example.sangeet.ui.motion.GlobalMotionPlanner
+import com.example.sangeet.ui.motion.MotionPreferencesSnapshot
 import kotlinx.coroutines.launch
 import java.util.Calendar
 
@@ -55,6 +58,7 @@ fun HomeScreen(
     onNavigateToEqualizer: () -> Unit,
     onNavigateToSpatial: () -> Unit,
     onNavigateToLibrary: () -> Unit,
+    onOpenProfile: () -> Unit = {},
     onOpenArtist: (String) -> Unit = {},
     onOpenAlbum: (String) -> Unit = {},
     onOpenPlaylist: (Long, String) -> Unit = { _, _ -> },
@@ -75,11 +79,20 @@ fun HomeScreen(
 
     val showGreeting by settingsRepo.showGreeting.collectAsState(initial = true)
     val spotlightHome by settingsRepo.spotlightHome.collectAsState(initial = true)
+    val userProfile by settingsRepo.userProfile.collectAsState(initial = UserProfileSnapshot())
     val animPrefs by settingsRepo.artworkAnimationPreferences.collectAsState(
         initial = ArtworkAnimationPreferencesSnapshot()
     )
-    val motion = rememberEffectiveArtworkMotion(animPrefs)
+    val globalMotionPrefs by settingsRepo.motionPreferences.collectAsState(
+        initial = MotionPreferencesSnapshot()
+    )
     val isAppResumed by rememberIsAppResumed()
+    val systemAnimatorsEnabled = remember(context, isAppResumed) {
+        ArtworkMotionPlanner.isSystemAnimationEnabled(context)
+    }
+    val motion = remember(animPrefs, globalMotionPrefs, systemAnimatorsEnabled) {
+        GlobalMotionPlanner.mergeWithArtworkPrefs(animPrefs, globalMotionPrefs, systemAnimatorsEnabled)
+    }
     val currentlyPlayingTrack by playbackManager.currentTrack.collectAsState()
     val isPlaying by playbackManager.isPlaying.collectAsState()
 
@@ -170,7 +183,7 @@ fun HomeScreen(
         contentPadding = PaddingValues(bottom = 120.dp, top = 16.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
-        // Top Greeting & Brand Bar
+        // Top Greeting & Brand Bar with Circular Profile Button
         item {
             Row(
                 modifier = Modifier
@@ -178,38 +191,27 @@ fun HomeScreen(
                     .padding(horizontal = 20.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                ProfileAvatarCircle(
+                    avatarPathOrUri = userProfile.avatarUriOrPath,
+                    displayName = userProfile.displayName,
+                    size = 42.dp,
+                    onClick = onOpenProfile,
+                    showGlow = true,
+                    modifier = Modifier.testTag("home_profile_btn")
+                )
+                Spacer(Modifier.width(12.dp))
                 if (showGreeting) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.testTag("home_greeting_badge")
-                    ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            modifier = Modifier.size(42.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    Icons.Rounded.Person,
-                                    contentDescription = "Profile",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-                        }
-                        Spacer(Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = greeting,
-                                style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold),
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = "SANGEET",
-                                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Black, letterSpacing = 2.sp),
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
+                    Column(modifier = Modifier.testTag("home_greeting_badge")) {
+                        Text(
+                            text = greeting,
+                            style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "SANGEET",
+                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Black, letterSpacing = 2.sp),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
                     }
                 } else {
                     Text(

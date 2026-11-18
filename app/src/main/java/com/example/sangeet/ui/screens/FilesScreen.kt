@@ -7,10 +7,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
@@ -24,6 +28,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
 import com.example.sangeet.data.model.*
 import com.example.sangeet.data.repository.MediaRepository
@@ -31,6 +36,7 @@ import com.example.sangeet.data.rules.RuleConflict
 import com.example.sangeet.playback.PlaybackManager
 import com.example.sangeet.scanner.FolderInspectionResult
 import com.example.sangeet.ui.components.*
+import com.example.sangeet.ui.motion.LocalSangeetMotion
 import kotlinx.coroutines.launch
 
 fun formatBytes(bytes: Long): String {
@@ -53,7 +59,12 @@ fun FilesScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    var selectedTab by remember { mutableIntStateOf(0) } // 0: Audio, 1: Videos, 2: Folders
+    val sangeetMotion = LocalSangeetMotion.current
+    val pagerState = rememberPagerState(initialPage = 0, pageCount = { 3 })
+    val selectedTab = pagerState.currentPage // 0: Audio, 1: Videos, 2: Folders
+    val audioListState = rememberLazyListState()
+    val videoListState = rememberLazyListState()
+    val folderListState = rememberLazyListState()
 
     val allTracks by repository.allTracks.collectAsState(initial = emptyList())
     val allVideos by repository.allVideos.collectAsState(initial = emptyList())
@@ -84,6 +95,12 @@ fun FilesScreen(
         selectedAudioIds = emptySet()
         selectedVideoIds = emptySet()
         selectedFolderKeys = emptySet()
+    }
+
+    LaunchedEffect(selectedTab) {
+        if (isSelectionMode) {
+            isSelectionMode = false
+        }
     }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -191,30 +208,59 @@ fun FilesScreen(
         TabRow(
             selectedTabIndex = selectedTab,
             modifier = Modifier.padding(horizontal = 16.dp),
+            indicator = { tabPositions ->
+                if (tabPositions.isNotEmpty()) {
+                    val currentPage = pagerState.currentPage.coerceIn(0, tabPositions.lastIndex)
+                    val offsetFraction = pagerState.currentPageOffsetFraction
+                    val nextPage = (currentPage + if (offsetFraction >= 0f) 1 else -1)
+                        .coerceIn(0, tabPositions.lastIndex)
+                    val currentPos = tabPositions[currentPage]
+                    val nextPos = tabPositions[nextPage]
+                    val fractionAbs = kotlin.math.abs(offsetFraction).coerceIn(0f, 1f)
+                    val indicatorLeft = lerp(currentPos.left, nextPos.left, fractionAbs)
+                    val indicatorWidth = lerp(currentPos.width, nextPos.width, fractionAbs)
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .wrapContentSize(Alignment.BottomStart)
+                            .offset(x = indicatorLeft)
+                            .width(indicatorWidth)
+                            .padding(horizontal = 10.dp)
+                            .height(3.dp)
+                            .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
+                            .background(MaterialTheme.colorScheme.primary)
+                    )
+                }
+            },
             divider = {}
         ) {
+            val selectPage: (Int) -> Unit = { target ->
+                isSelectionMode = false
+                coroutineScope.launch {
+                    if (sangeetMotion.isReducedMotion) {
+                        pagerState.scrollToPage(target)
+                    } else {
+                        pagerState.animateScrollToPage(
+                            page = target,
+                            animationSpec = sangeetMotion.floatSpring()
+                        )
+                    }
+                }
+            }
             Tab(
                 selected = selectedTab == 0,
-                onClick = {
-                    selectedTab = 0
-                    isSelectionMode = false
-                },
+                onClick = { selectPage(0) },
                 text = { Text("Music (${allTracks.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) }
             )
             Tab(
                 selected = selectedTab == 1,
-                onClick = {
-                    selectedTab = 1
-                    isSelectionMode = false
-                },
+                onClick = { selectPage(1) },
                 text = { Text("Videos (${allVideos.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) }
             )
             Tab(
                 selected = selectedTab == 2,
-                onClick = {
-                    selectedTab = 2
-                    isSelectionMode = false
-                },
+                onClick = { selectPage(2) },
                 text = { Text("Folders (${mediaFolders.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 modifier = Modifier.testTag("files_tab_folders")
             )
@@ -315,7 +361,15 @@ fun FilesScreen(
 
         Spacer(Modifier.height(8.dp))
 
-        when (selectedTab) {
+        HorizontalPager(
+            state = pagerState,
+            userScrollEnabled = sangeetMotion.allowHorizontalSwipes && !isSelectionMode,
+            beyondViewportPageCount = 1,
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+        ) { page ->
+        when (page) {
             0 -> {
                 if (allTracks.isEmpty()) {
                     Box(
@@ -326,6 +380,7 @@ fun FilesScreen(
                     }
                 } else {
                     LazyColumn(
+                        state = audioListState,
                         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 120.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
@@ -505,6 +560,7 @@ fun FilesScreen(
                     }
                 } else {
                     LazyColumn(
+                        state = videoListState,
                         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 120.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
@@ -676,6 +732,7 @@ fun FilesScreen(
             else -> {
                 // Folders tab (SAF direct folder picker + discovered folders with contextual actions)
                 LazyColumn(
+                    state = folderListState,
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 120.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -830,6 +887,7 @@ fun FilesScreen(
                     }
                 }
             }
+        }
         }
     }
 

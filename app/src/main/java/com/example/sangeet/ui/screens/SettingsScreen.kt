@@ -33,6 +33,7 @@ import com.example.sangeet.data.repository.MediaRepository
 import com.example.sangeet.data.repository.NotificationPreferencesSnapshot
 import com.example.sangeet.data.repository.SettingsRepository
 import com.example.sangeet.playback.PlaybackManager
+import com.example.sangeet.playback.crossfade.CrossfadeMode
 import com.example.sangeet.ui.components.ArtworkAnimationPreferencesSnapshot
 import com.example.sangeet.ui.components.ArtworkPathCache
 import com.example.sangeet.ui.components.CassetteArtwork
@@ -40,6 +41,10 @@ import com.example.sangeet.ui.components.CassetteHeaderBadge
 import com.example.sangeet.ui.components.CassetteSectionCard
 import com.example.sangeet.ui.components.CassetteSectionHeader
 import com.example.sangeet.ui.components.CassetteTopBar
+import com.example.sangeet.ui.motion.MotionPreferencesSnapshot
+import com.example.sangeet.ui.motion.MotionSettingsSection
+import com.example.sangeet.ui.startup.StartupAnimationPreferencesSnapshot
+import com.example.sangeet.ui.startup.StartupAnimationSettingsSection
 import com.example.ui.theme.AccentColor
 import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.launch
@@ -59,6 +64,10 @@ fun SettingsScreen(
     onNavigateToNotificationSettings: () -> Unit,
     onNavigateToArtworkAnimationSettings: () -> Unit,
     onNavigateToBlacklistWhitelist: (Int) -> Unit,
+    onNavigateToLyricsSettings: () -> Unit = {},
+    onNavigateToCrossfadeSettings: () -> Unit = {},
+    onNavigateToAbout: () -> Unit = {},
+    onPreviewStartupAnimation: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -77,11 +86,13 @@ fun SettingsScreen(
 
     val lyricsFontSize by settingsRepo.lyricsFontSize.collectAsState(initial = 18f)
     val lyricsAutoSync by settingsRepo.lyricsAutoSync.collectAsState(initial = true)
-    val crossfadeSec by settingsRepo.crossfadeSeconds.collectAsState(initial = 0)
+    val crossfadePrefs by playbackManager.crossfadePrefs.collectAsState()
     val gaplessEnabled by settingsRepo.gaplessPlayback.collectAsState(initial = true)
     val artworkPriority by settingsRepo.artworkPriority.collectAsState(initial = "EMBEDDED_FIRST")
     val notifPrefs by settingsRepo.notificationPreferences.collectAsState(initial = NotificationPreferencesSnapshot())
     val artAnimPrefs by settingsRepo.artworkAnimationPreferences.collectAsState(initial = ArtworkAnimationPreferencesSnapshot())
+    val startupPrefs by settingsRepo.startupAnimationPreferences.collectAsState(initial = StartupAnimationPreferencesSnapshot())
+    val motionPrefs by settingsRepo.motionPreferences.collectAsState(initial = MotionPreferencesSnapshot())
 
     var showClearHistoryDialog by remember { mutableStateOf(false) }
     var showSleepTimerDialog by remember { mutableStateOf(false) }
@@ -399,6 +410,117 @@ fun SettingsScreen(
             }
         }
 
+        // Section: Walkman Startup Animation
+        item {
+            StartupAnimationSettingsSection(
+                prefs = startupPrefs,
+                onStyleSelected = { style ->
+                    coroutineScope.launch { settingsRepo.setStartupAnimationStyle(style) }
+                },
+                onSpeedSelected = { speed ->
+                    coroutineScope.launch { settingsRepo.setStartupAnimationSpeed(speed) }
+                },
+                onSoundsToggled = { enabled ->
+                    coroutineScope.launch { settingsRepo.setStartupAnimationSoundsEnabled(enabled) }
+                },
+                onVibrationToggled = { enabled ->
+                    coroutineScope.launch { settingsRepo.setStartupAnimationVibrationEnabled(enabled) }
+                },
+                onPreviewClicked = onPreviewStartupAnimation
+            )
+        }
+
+        // Section: Global Motion & Gestures
+        item {
+            MotionSettingsSection(
+                prefs = motionPrefs,
+                onQualitySelected = { quality ->
+                    coroutineScope.launch { settingsRepo.setMotionQuality(quality) }
+                },
+                onSpeedSelected = { speed ->
+                    coroutineScope.launch { settingsRepo.setMotionSpeed(speed) }
+                },
+                onHorizontalSwipesChanged = { enabled ->
+                    coroutineScope.launch { settingsRepo.setMotionHorizontalSwipesEnabled(enabled) }
+                },
+                onVerticalSwipesChanged = { enabled ->
+                    coroutineScope.launch { settingsRepo.setMotionVerticalSwipesEnabled(enabled) }
+                },
+                onPlayerGesturesChanged = { enabled ->
+                    coroutineScope.launch { settingsRepo.setMotionPlayerGesturesEnabled(enabled) }
+                },
+                onCassetteTransitionsChanged = { enabled ->
+                    coroutineScope.launch { settingsRepo.setMotionCassetteTransitionsEnabled(enabled) }
+                },
+                onSwipeToDismissChanged = { enabled ->
+                    coroutineScope.launch { settingsRepo.setMotionSwipeToDismissEnabled(enabled) }
+                },
+                onReducedMotionChanged = { enabled ->
+                    coroutineScope.launch { settingsRepo.setMotionReducedMotion(enabled) }
+                },
+                onDisableDecorativeChanged = { enabled ->
+                    coroutineScope.launch { settingsRepo.setMotionDisableDecorativeAnimations(enabled) }
+                },
+                onResetDefaults = {
+                    coroutineScope.launch { settingsRepo.resetMotionSettingsToDefault() }
+                }
+            )
+        }
+
+        // Section: Playback & Crossfade
+        item {
+            CassetteSectionCard {
+                Column(modifier = Modifier.padding(8.dp)) {
+                    CassetteSectionHeader(
+                        title = "Playback",
+                        badgeText = when (crossfadePrefs.mode) {
+                            CrossfadeMode.OFF -> "GAPLESS"
+                            CrossfadeMode.ADVANCED -> "${crossfadePrefs.advancedDurationSeconds}S FADE"
+                            CrossfadeMode.DJ_STYLE -> "DJ MIX"
+                        },
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+                    )
+                    ListItem(
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        headlineContent = { Text("Crossfade") },
+                        supportingContent = {
+                            val summary = when (crossfadePrefs.mode) {
+                                CrossfadeMode.OFF -> "Off • Sequential playback"
+                                CrossfadeMode.ADVANCED -> "Advanced Crossfade • ${crossfadePrefs.advancedDurationSeconds}s equal-power"
+                                CrossfadeMode.DJ_STYLE -> "DJ-Style • ${crossfadePrefs.djTransitionStyle.displayName} (${crossfadePrefs.djDurationSeconds}s)"
+                            }
+                            Text(summary)
+                        },
+                        leadingContent = {
+                            Icon(Icons.Rounded.SwapHoriz, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        },
+                        trailingContent = {
+                            Icon(Icons.Rounded.ChevronRight, contentDescription = null)
+                        },
+                        modifier = Modifier
+                            .clickable { onNavigateToCrossfadeSettings() }
+                            .testTag("settings_crossfade_btn")
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+                    ListItem(
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        headlineContent = { Text("Gapless Playback") },
+                        supportingContent = { Text("Eliminate silence between consecutive tracks when Crossfade is Off") },
+                        leadingContent = {
+                            Icon(Icons.Rounded.Album, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        },
+                        trailingContent = {
+                            Switch(
+                                checked = gaplessEnabled,
+                                onCheckedChange = { coroutineScope.launch { settingsRepo.setGaplessPlayback(it) } },
+                                modifier = Modifier.testTag("settings_gapless_switch")
+                            )
+                        }
+                    )
+                }
+            }
+        }
+
         // Section: Audio DSP Controls
         item {
             CassetteSectionCard {
@@ -501,6 +623,24 @@ fun SettingsScreen(
                 ) {
                     CassetteSectionHeader(title = "Album Artwork & Lyrics")
 
+                    // Full-Screen Lyrics Appearance Screen Entry
+                    ListItem(
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        headlineContent = { Text("Full-Screen Lyrics Appearance", fontWeight = FontWeight.SemiBold) },
+                        supportingContent = { Text("Font style, highlight color, word sync, blur & dimming") },
+                        leadingContent = {
+                            Icon(Icons.Rounded.Lyrics, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        },
+                        trailingContent = {
+                            Icon(Icons.Rounded.ChevronRight, contentDescription = null)
+                        },
+                        modifier = Modifier
+                            .clickable { onNavigateToLyricsSettings() }
+                            .testTag("settings_lyrics_customization_btn")
+                    )
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+
                     // Lyrics Font Size
                     Column {
                         Row(
@@ -511,11 +651,11 @@ fun SettingsScreen(
                             Text("${lyricsFontSize.toInt()} sp", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
                         }
                         Slider(
-                            value = lyricsFontSize,
+                            value = lyricsFontSize.coerceIn(14f, 30f),
                             onValueChange = {
                                 coroutineScope.launch { settingsRepo.setLyricsFontSize(it) }
                             },
-                            valueRange = 12f..28f,
+                            valueRange = 14f..30f,
                             steps = 7
                         )
                     }
@@ -694,6 +834,37 @@ fun SettingsScreen(
                             Icon(Icons.Rounded.RestartAlt, contentDescription = null, tint = MaterialTheme.colorScheme.error)
                         },
                         modifier = Modifier.clickable { showResetSettingsDialog = true }
+                    )
+                }
+            }
+        }
+        item {
+            val appMetadata = remember(context) { readActualAppMetadata(context) }
+            CassetteSectionCard {
+                Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                    CassetteSectionHeader(
+                        title = "About & Developer",
+                        badgeText = "v${appMetadata.versionName}",
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                    )
+                    ListItem(
+                        headlineContent = { Text("About ${appMetadata.appName}") },
+                        supportingContent = {
+                            Text("Version ${appMetadata.versionName} (${appMetadata.versionCode}) • 🩺 Dr. M. Ganeswar")
+                        },
+                        leadingContent = {
+                            Icon(
+                                Icons.Rounded.Info,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        trailingContent = {
+                            Icon(Icons.Rounded.ChevronRight, contentDescription = null)
+                        },
+                        modifier = Modifier
+                            .clickable { onNavigateToAbout() }
+                            .testTag("settings_about_sangeet_btn")
                     )
                 }
             }

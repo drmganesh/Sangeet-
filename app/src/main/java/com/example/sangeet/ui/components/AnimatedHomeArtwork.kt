@@ -35,6 +35,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.sangeet.data.model.AudioTrack
+import com.example.sangeet.ui.motion.LocalSangeetMotion
+import com.example.sangeet.ui.motion.sangeetHorizontalSwipeDeck
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.PI
@@ -339,8 +341,6 @@ fun AnimatedFeaturedSpotlightCard(
     val isPressed by interactionSource.collectIsPressedAsState()
     var isLaunching by remember { mutableStateOf(false) }
 
-    val density = LocalDensity.current
-    val swipeThresholdPx = with(density) { 42.dp.toPx() }
     val currentOnSwipeNext by rememberUpdatedState(onSwipeNext)
     val currentOnSwipePrevious by rememberUpdatedState(onSwipePrevious)
     val currentFeaturedCount by rememberUpdatedState(featuredCount)
@@ -436,7 +436,7 @@ fun AnimatedFeaturedSpotlightCard(
         lightSweep = 0.5f
     }
 
-    val primaryColor = MaterialTheme.colorScheme.primary
+    val globalMotion = LocalSangeetMotion.current
     val effectiveDirectionSign = ArtworkMotionPlanner.resolveSpotlightDirectionSign(
         direction = motion.spotlightTransitionDirection,
         navigationDelta = navigationDirection
@@ -450,43 +450,13 @@ fun AnimatedFeaturedSpotlightCard(
                 scaleX = cardScale
                 scaleY = cardScale
             }
-            .pointerInput(currentFeaturedCount) {
-                if (currentFeaturedCount <= 1) return@pointerInput
-                var accumulatedDragX = 0f
-                var handledThisGesture = false
-                detectHorizontalDragGestures(
-                    onDragStart = {
-                        accumulatedDragX = 0f
-                        handledThisGesture = false
-                    },
-                    onDragCancel = {
-                        accumulatedDragX = 0f
-                        handledThisGesture = false
-                    },
-                    onDragEnd = {
-                        if (!handledThisGesture) {
-                            when {
-                                accumulatedDragX <= -swipeThresholdPx -> currentOnSwipeNext()
-                                accumulatedDragX >= swipeThresholdPx -> currentOnSwipePrevious()
-                            }
-                        }
-                        accumulatedDragX = 0f
-                        handledThisGesture = false
-                    },
-                    onHorizontalDrag = { change, dragAmount ->
-                        change.consume()
-                        accumulatedDragX += dragAmount
-                        if (!handledThisGesture && abs(accumulatedDragX) >= swipeThresholdPx * 1.45f) {
-                            handledThisGesture = true
-                            if (accumulatedDragX < 0f) {
-                                currentOnSwipeNext()
-                            } else {
-                                currentOnSwipePrevious()
-                            }
-                        }
-                    }
-                )
-            }
+            .sangeetHorizontalSwipeDeck(
+                enabled = currentFeaturedCount > 1,
+                itemCount = currentFeaturedCount,
+                applyPerspectiveTilt = globalMotion.isMotionEnabled && !globalMotion.isReducedMotion,
+                onSwipeLeftNext = currentOnSwipeNext,
+                onSwipeRightPrevious = currentOnSwipePrevious
+            )
             .clickable(
                 interactionSource = interactionSource,
                 indication = ripple()

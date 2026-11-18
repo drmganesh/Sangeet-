@@ -6,23 +6,32 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -34,13 +43,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.example.LibraryRouteRequest
 import com.example.sangeet.data.model.*
 import com.example.sangeet.data.repository.MediaFolderSummary
@@ -50,6 +65,7 @@ import com.example.sangeet.data.rules.StoragePathHelper
 import com.example.sangeet.playback.PlaybackManager
 import com.example.sangeet.scanner.FolderInspectionResult
 import com.example.sangeet.ui.components.*
+import com.example.sangeet.ui.motion.LocalSangeetMotion
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -94,10 +110,29 @@ fun LibraryScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val sangeetMotion = LocalSangeetMotion.current
+    val haptic = LocalHapticFeedback.current
 
-    var selectedTab by remember { mutableStateOf(LibraryTab.SONGS) }
+    val pagerState = rememberPagerState(
+        initialPage = 0,
+        pageCount = { LibraryTab.entries.size }
+    )
+    val selectedTab by remember {
+        derivedStateOf {
+            LibraryTab.entries[pagerState.currentPage.coerceIn(0, LibraryTab.entries.lastIndex)]
+        }
+    }
     var currentSort by remember { mutableStateOf(SortOrder.TITLE) }
     var showSortMenu by remember { mutableStateOf(false) }
+
+    // Per-tab preserved scroll states
+    val songsListState = rememberLazyListState()
+    val albumsGridState = rememberLazyGridState()
+    val artistsListState = rememberLazyListState()
+    val foldersListState = rememberLazyListState()
+    val genresGridState = rememberLazyGridState()
+    val playlistsListState = rememberLazyListState()
+    val favoritesListState = rememberLazyListState()
 
     val allTracks by repository.allTracks.collectAsState(initial = emptyList())
     val favoriteTracks by repository.favoriteTracks.collectAsState(initial = emptyList())
@@ -119,17 +154,17 @@ fun LibraryScreen(
     LaunchedEffect(routeRequest) {
         when (routeRequest) {
             is LibraryRouteRequest.OpenAlbum -> {
-                selectedTab = LibraryTab.ALBUMS
+                pagerState.scrollToPage(LibraryTab.ALBUMS.ordinal)
                 activeSubFilter = LibrarySubFilter.Album(routeRequest.albumName)
                 onRouteRequestConsumed()
             }
             is LibraryRouteRequest.OpenArtist -> {
-                selectedTab = LibraryTab.ARTISTS
+                pagerState.scrollToPage(LibraryTab.ARTISTS.ordinal)
                 activeSubFilter = LibrarySubFilter.Artist(routeRequest.artistName)
                 onRouteRequestConsumed()
             }
             is LibraryRouteRequest.OpenPlaylist -> {
-                selectedTab = LibraryTab.PLAYLISTS
+                pagerState.scrollToPage(LibraryTab.PLAYLISTS.ordinal)
                 activeSubFilter = LibrarySubFilter.PlaylistFilter(routeRequest.playlistId, routeRequest.playlistName)
                 onRouteRequestConsumed()
             }
@@ -359,6 +394,31 @@ fun LibraryScreen(
                 edgePadding = 16.dp,
                 containerColor = MaterialTheme.colorScheme.surface,
                 contentColor = MaterialTheme.colorScheme.primary,
+                indicator = { tabPositions ->
+                    if (tabPositions.isNotEmpty()) {
+                        val currentPage = pagerState.currentPage.coerceIn(0, tabPositions.lastIndex)
+                        val offsetFraction = pagerState.currentPageOffsetFraction
+                        val nextPage = (currentPage + if (offsetFraction >= 0f) 1 else -1)
+                            .coerceIn(0, tabPositions.lastIndex)
+                        val currentPos = tabPositions[currentPage]
+                        val nextPos = tabPositions[nextPage]
+                        val fractionAbs = kotlin.math.abs(offsetFraction).coerceIn(0f, 1f)
+                        val indicatorLeft = lerp(currentPos.left, nextPos.left, fractionAbs)
+                        val indicatorWidth = lerp(currentPos.width, nextPos.width, fractionAbs)
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .wrapContentSize(Alignment.BottomStart)
+                                .offset(x = indicatorLeft)
+                                .width(indicatorWidth)
+                                .padding(horizontal = 12.dp)
+                                .height(3.dp)
+                                .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
+                                .background(MaterialTheme.colorScheme.primary)
+                        )
+                    }
+                },
                 divider = {
                     HorizontalDivider(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
                 }
@@ -367,10 +427,19 @@ fun LibraryScreen(
                     Tab(
                         selected = selectedTab == tab,
                         onClick = {
-                            selectedTab = tab
                             isSelectionMode = false
                             selectedTrackIds = emptySet()
                             selectedFolderKeys = emptySet()
+                            coroutineScope.launch {
+                                if (sangeetMotion.isReducedMotion) {
+                                    pagerState.scrollToPage(tab.ordinal)
+                                } else {
+                                    pagerState.animateScrollToPage(
+                                        page = tab.ordinal,
+                                        animationSpec = sangeetMotion.floatSpring()
+                                    )
+                                }
+                            }
                         },
                         text = {
                             Text(
@@ -464,12 +533,26 @@ fun LibraryScreen(
             }
         )
 
+        var recentRemovedPlaylistItem by remember { mutableStateOf<Triple<Long, Int, AudioTrack>?>(null) }
+        LaunchedEffect(activeSubFilter) {
+            if (activeSubFilter !is LibrarySubFilter.PlaylistFilter) {
+                recentRemovedPlaylistItem = null
+            }
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 16.dp)
         ) {
-            val subFilter = activeSubFilter
+            AnimatedContent(
+                targetState = activeSubFilter,
+                transitionSpec = {
+                    val forward = targetState != null
+                    sangeetMotion.tabTransitionSpec<LibrarySubFilter?>(if (forward) 1 else -1)
+                },
+                label = "library_subfilter_transition"
+            ) { subFilter ->
             if (subFilter != null) {
                 val isPlaylistSub = subFilter is LibrarySubFilter.PlaylistFilter
                 TrackList(
@@ -513,6 +596,8 @@ fun LibraryScreen(
                     } else null,
                     onRemoveTrackFromPlaylist = if (isPlaylistSub) {
                         { track ->
+                            val idx = activeFilterTracks.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
+                            recentRemovedPlaylistItem = Triple(subFilter.id, idx, track)
                             coroutineScope.launch {
                                 repository.removeTrackFromPlaylist(subFilter.id, track.id)
                             }
@@ -626,10 +711,19 @@ fun LibraryScreen(
                     }
                 )
             } else {
-                when (selectedTab) {
+                HorizontalPager(
+                    state = pagerState,
+                    beyondViewportPageCount = 1,
+                    userScrollEnabled = sangeetMotion.allowHorizontalSwipes && !isSelectionMode,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("library_horizontal_pager")
+                ) { pageIndex ->
+                when (LibraryTab.entries[pageIndex]) {
                     LibraryTab.SONGS -> {
                         TrackList(
                             tracks = sortedTracks,
+                            listState = songsListState,
                             currentTrackId = currentPlayingTrack?.id,
                             isAudioPlaying = isAudioPlaying && isAppResumed,
                             blacklistEntries = blacklistEntries,
@@ -640,6 +734,7 @@ fun LibraryScreen(
                                 selectedTrackIds = if (id in selectedTrackIds) selectedTrackIds - id else selectedTrackIds + id
                             },
                             onEnterSelectionMode = { id ->
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 isSelectionMode = true
                                 selectedTrackIds = selectedTrackIds + id
                             },
@@ -667,6 +762,7 @@ fun LibraryScreen(
                             }
                         } else {
                             LazyVerticalGrid(
+                                state = albumsGridState,
                                 columns = GridCells.Fixed(2),
                                 contentPadding = PaddingValues(top = 14.dp, bottom = 120.dp),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -862,6 +958,7 @@ fun LibraryScreen(
                             }
                         } else {
                             LazyColumn(
+                                state = artistsListState,
                                 contentPadding = PaddingValues(top = 14.dp, bottom = 120.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
@@ -946,6 +1043,7 @@ fun LibraryScreen(
 
                     LibraryTab.FOLDERS -> {
                         LazyColumn(
+                            state = foldersListState,
                             contentPadding = PaddingValues(top = 12.dp, bottom = 120.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
@@ -1120,6 +1218,7 @@ fun LibraryScreen(
                             }
                         } else {
                             LazyVerticalGrid(
+                                state = genresGridState,
                                 columns = GridCells.Fixed(2),
                                 contentPadding = PaddingValues(top = 14.dp, bottom = 120.dp),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1157,6 +1256,7 @@ fun LibraryScreen(
                             }
                         } else {
                             LazyColumn(
+                                state = playlistsListState,
                                 contentPadding = PaddingValues(top = 14.dp, bottom = 120.dp),
                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
@@ -1288,6 +1388,7 @@ fun LibraryScreen(
                     LibraryTab.FAVORITES -> {
                         TrackList(
                             tracks = favoriteTracks,
+                            listState = favoritesListState,
                             currentTrackId = currentPlayingTrack?.id,
                             isAudioPlaying = isAudioPlaying && isAppResumed,
                             blacklistEntries = blacklistEntries,
@@ -1298,6 +1399,7 @@ fun LibraryScreen(
                                 selectedTrackIds = if (id in selectedTrackIds) selectedTrackIds - id else selectedTrackIds + id
                             },
                             onEnterSelectionMode = { id ->
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 isSelectionMode = true
                                 selectedTrackIds = selectedTrackIds + id
                             },
@@ -1312,6 +1414,62 @@ fun LibraryScreen(
                             onRemoveBlacklistId = { id -> coroutineScope.launch { repository.removeFromBlacklist(id) } },
                             onRemoveWhitelistId = { id -> coroutineScope.launch { repository.removeFromWhitelist(id) } }
                         )
+                    }
+                }
+                }
+            }
+            }
+
+            // Floating Undo banner for playlist track swipe-to-remove
+            androidx.compose.animation.AnimatedVisibility(
+                visible = recentRemovedPlaylistItem != null && activeSubFilter is LibrarySubFilter.PlaylistFilter,
+                enter = sangeetMotion.miniPlayerEnter(),
+                exit = sangeetMotion.miniPlayerExit(),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 16.dp)
+            ) {
+                val removed = recentRemovedPlaylistItem
+                if (removed != null) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.inverseSurface,
+                        shadowElevation = 8.dp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("playlist_undo_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Removed \"${removed.third.title}\" from playlist",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.inverseOnSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = {
+                                    val (plId, oldIdx, trackToRestore) = removed
+                                    recentRemovedPlaylistItem = null
+                                    coroutineScope.launch {
+                                        val mutable = activeFilterTracks
+                                            .map { it.id }
+                                            .filterNot { it == trackToRestore.id }
+                                            .toMutableList()
+                                        val insertIdx = oldIdx.coerceIn(0, mutable.size)
+                                        mutable.add(insertIdx, trackToRestore.id)
+                                        repository.reorderPlaylistTracks(plId, mutable)
+                                    }
+                                },
+                                modifier = Modifier.testTag("playlist_undo_btn")
+                            ) {
+                                Text("UNDO", fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
                     }
                 }
             }
@@ -1739,7 +1897,7 @@ private fun PlaylistDetailHeader(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun TrackList(
     tracks: List<AudioTrack>,
@@ -1765,9 +1923,18 @@ fun TrackList(
     onMoveTrackInPlaylist: ((Int, Int) -> Unit)? = null,
     onRemoveTrackFromPlaylist: ((AudioTrack) -> Unit)? = null,
     headerContent: (@Composable () -> Unit)? = null,
+    listState: LazyListState = rememberLazyListState(),
     modifier: Modifier = Modifier
 ) {
+    val sangeetMotion = LocalSangeetMotion.current
+    val haptic = LocalHapticFeedback.current
+    val density = LocalDensity.current
+    val dragStepPx = with(density) { 64.dp.toPx() }
+    var draggingPlaylistIdx by remember { mutableStateOf<Int?>(null) }
+    var playlistDragOffsetY by remember { mutableFloatStateOf(0f) }
+
     LazyColumn(
+        state = listState,
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(top = 8.dp, bottom = 120.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -1792,6 +1959,16 @@ fun TrackList(
                 var showItemMenu by remember { mutableStateOf(false) }
                 val isSelected = track.id in selectedTrackIds
                 val isPlayingThis = currentTrackId == track.id
+                val isDraggingRow = isPlaylistReorderMode && draggingPlaylistIdx == index
+                val selectionScale by animateFloatAsState(
+                    targetValue = when {
+                        isDraggingRow -> 1.02f
+                        isSelected && sangeetMotion.isMotionEnabled -> 0.98f
+                        else -> 1f
+                    },
+                    animationSpec = sangeetMotion.floatSpring(),
+                    label = "trackRowSelectionScale"
+                )
                 val activeSpin = isPlayingThis && isAudioPlaying
                 val seedAngle = remember(track.id) { ((track.id * 41L) % 360L).toFloat() }
                 val reelAngle by rememberVisibleCassetteReelAngle(
@@ -1807,25 +1984,86 @@ fun TrackList(
                     it.type.equals("SONG", true) && (it.identifier.equals(trackIdentifier, true) || it.identifier.equals(track.title, true))
                 }
 
+                var dismissedPlaylistRow by remember(track.id) { mutableStateOf(false) }
+                val canSwipePlaylistTrack = isPlaylistReorderMode &&
+                    onRemoveTrackFromPlaylist != null &&
+                    sangeetMotion.allowSwipeToDismiss &&
+                    !isSelectionMode &&
+                    draggingPlaylistIdx == null
+                val dismissState = rememberSwipeToDismissBoxState(
+                    confirmValueChange = { value ->
+                        if (canSwipePlaylistTrack && value == SwipeToDismissBoxValue.EndToStart && !dismissedPlaylistRow) {
+                            dismissedPlaylistRow = true
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onRemoveTrackFromPlaylist?.invoke(track)
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                )
+
+                SwipeToDismissBox(
+                    state = dismissState,
+                    enableDismissFromStartToEnd = false,
+                    enableDismissFromEndToStart = canSwipePlaylistTrack,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .animateItem(placementSpec = sangeetMotion.intOffsetSpring())
+                        .zIndex(if (isDraggingRow) 2f else 0f),
+                    backgroundContent = {
+                        val bgColor by animateColorAsState(
+                            targetValue = if (dismissState.targetValue == SwipeToDismissBoxValue.EndToStart) {
+                                MaterialTheme.colorScheme.errorContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                            },
+                            label = "playlistSwipeBg"
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(bgColor)
+                                .padding(horizontal = 20.dp),
+                            contentAlignment = Alignment.CenterEnd
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.PlaylistRemove,
+                                contentDescription = "Remove from Playlist",
+                                tint = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+                ) {
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .graphicsLayer {
+                            translationY = if (isDraggingRow) playlistDragOffsetY else 0f
+                            scaleX = selectionScale
+                            scaleY = selectionScale
+                        }
                         .clip(RoundedCornerShape(14.dp))
                         .combinedClickable(
                             onClick = {
                                 if (isSelectionMode) onToggleSelect(track.id) else onPlay(track)
                             },
-                            onLongClick = { onEnterSelectionMode(track.id) }
+                            onLongClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onEnterSelectionMode(track.id)
+                            }
                         ),
                     shape = RoundedCornerShape(14.dp),
                     color = when {
+                        isDraggingRow -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
                         isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
                         isPlayingThis -> MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
                         else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f)
                     },
                     border = BorderStroke(
-                        width = if (isPlayingThis || isSelected) 1.2.dp else 0.7.dp,
-                        color = if (isPlayingThis || isSelected) {
+                        width = if (isPlayingThis || isSelected || isDraggingRow) 1.2.dp else 0.7.dp,
+                        color = if (isPlayingThis || isSelected || isDraggingRow) {
                             MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
                         } else {
                             MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
@@ -1841,6 +2079,49 @@ fun TrackList(
                         if (isSelectionMode) {
                             Checkbox(checked = isSelected, onCheckedChange = { onToggleSelect(track.id) })
                             Spacer(Modifier.width(4.dp))
+                        } else if (isPlaylistReorderMode && onMoveTrackInPlaylist != null) {
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .pointerInput(tracks.size, index) {
+                                        detectVerticalDragGestures(
+                                            onDragStart = {
+                                                draggingPlaylistIdx = index
+                                                playlistDragOffsetY = 0f
+                                            },
+                                            onDragEnd = {
+                                                draggingPlaylistIdx = null
+                                                playlistDragOffsetY = 0f
+                                            },
+                                            onDragCancel = {
+                                                draggingPlaylistIdx = null
+                                                playlistDragOffsetY = 0f
+                                            },
+                                            onVerticalDrag = { change, dragAmount ->
+                                                change.consume()
+                                                val activeIdx = draggingPlaylistIdx ?: return@detectVerticalDragGestures
+                                                playlistDragOffsetY += dragAmount
+                                                if (playlistDragOffsetY > dragStepPx && activeIdx < tracks.lastIndex) {
+                                                    onMoveTrackInPlaylist(activeIdx, 1)
+                                                    draggingPlaylistIdx = activeIdx + 1
+                                                    playlistDragOffsetY -= dragStepPx
+                                                } else if (playlistDragOffsetY < -dragStepPx && activeIdx > 0) {
+                                                    onMoveTrackInPlaylist(activeIdx, -1)
+                                                    draggingPlaylistIdx = activeIdx - 1
+                                                    playlistDragOffsetY += dragStepPx
+                                                }
+                                            }
+                                        )
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.DragHandle,
+                                    contentDescription = "Drag to Reorder",
+                                    tint = if (isDraggingRow) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(19.dp)
+                                )
+                            }
                         }
 
                         MiniCassetteArtwork(
@@ -2056,6 +2337,7 @@ fun TrackList(
                             }
                         }
                     }
+                }
                 }
             }
         }

@@ -11,11 +11,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.SurroundSound
+import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -44,8 +48,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.sangeet.data.model.AudioTrack
 import com.example.sangeet.playback.PlaybackManager
+import com.example.sangeet.playback.crossfade.CrossfadeMode
 import com.example.sangeet.ui.components.ArtworkMotionPlanner
 import com.example.sangeet.ui.components.rememberIsAppResumed
+import com.example.sangeet.ui.motion.LocalSangeetMotion
+import com.example.sangeet.ui.motion.sangeetHorizontalSwipeDeck
+import com.example.sangeet.ui.motion.sangeetVerticalPlayerSwipe
 
 private val WalkmanBackdropTop = Color(0xFF0A0805)
 private val WalkmanBackdropBottom = Color(0xFF000000)
@@ -58,6 +66,8 @@ fun PlayerContainer(
     onDismiss: () -> Unit,
     onNavigateToEqualizer: () -> Unit,
     onNavigateToSpatial: () -> Unit,
+    onOpenFullScreenLyrics: () -> Unit = {},
+    onOpenCrossfadeSettings: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -71,16 +81,21 @@ fun PlayerContainer(
     val cassetteStyle by playbackManager.cassetteStyle.collectAsState()
     val mechanicalSounds by playbackManager.walkmanMechanicalSounds.collectAsState()
     val queue by playbackManager.queue.collectAsState()
+    val crossfadePrefs by playbackManager.crossfadePrefs.collectAsState()
+    val transitionVisualState by playbackManager.transitionVisualState.collectAsState()
 
+    val sangeetMotion = LocalSangeetMotion.current
     val isAppResumed by rememberIsAppResumed()
     val systemAnimatorsEnabled = remember(context, isAppResumed) {
         ArtworkMotionPlanner.isSystemAnimationEnabled(context)
     }
-    val reducedMotion = !systemAnimatorsEnabled
+    val reducedMotion = !systemAnimatorsEnabled || sangeetMotion.isReducedMotion
+    val playerScrollState = rememberScrollState()
 
     var showCassetteStyleSheet by remember { mutableStateOf(false) }
     var showLyricsSheet by remember { mutableStateOf(false) }
     var showQueueSheet by remember { mutableStateOf(false) }
+    var showDjDeckSheet by remember { mutableStateOf(false) }
 
     var seekImpulseDirection by remember { mutableIntStateOf(0) }
     var seekImpulseToken by remember { mutableIntStateOf(0) }
@@ -177,6 +192,22 @@ fun PlayerContainer(
                         )
                     }
                     IconButton(
+                        onClick = { showDjDeckSheet = true },
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("player_dj_deck_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.SwapHoriz,
+                            contentDescription = "DJ Crossfade Deck",
+                            tint = if (transitionVisualState.isActive || crossfadePrefs.mode != CrossfadeMode.OFF) {
+                                WalkmanAccentGold
+                            } else {
+                                Color(0xFFF3F4F6)
+                            }
+                        )
+                    }
+                    IconButton(
                         onClick = onNavigateToSpatial,
                         modifier = Modifier
                             .minimumInteractiveComponentSize()
@@ -205,30 +236,65 @@ fun PlayerContainer(
                     )
                 )
                 .padding(innerPadding)
+                .sangeetVerticalPlayerSwipe(
+                    enabled = !showLyricsSheet && !showQueueSheet && !showCassetteStyleSheet && !showDjDeckSheet,
+                    canDismissDown = { playerScrollState.value <= 2 },
+                    onSwipeDownDismiss = onDismiss,
+                    onSwipeUpLyrics = onOpenFullScreenLyrics
+                )
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
+                    .verticalScroll(playerScrollState)
                     .padding(horizontal = 20.dp, vertical = 10.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                // Signature Vintage Walkman Cassette Player
-                WalkmanBody(
-                    track = track,
-                    cassetteStyle = cassetteStyle,
-                    transportState = transportState,
-                    swapController = swapController,
-                    reelAngles = reelAngles,
-                    progressFraction = progressFraction,
-                    reducedMotion = reducedMotion,
-                    onRewind = {
-                        WalkmanSoundEngine.playIfEnabled(mechanicalSounds, MechanicalSoundType.BUTTON_PRESS)
-                        seekImpulseDirection = -1
-                        seekImpulseToken++
-                        playbackManager.seekBackward(10_000L)
-                    },
+                // Signature Vintage Walkman Cassette Player with edge-safe swipe-left/right track gestures
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .sangeetHorizontalSwipeDeck(
+                            enabled = sangeetMotion.allowPlayerGestures && queue.size > 1,
+                            itemCount = queue.size,
+                            applyPerspectiveTilt = sangeetMotion.allowCassetteTransitions && !reducedMotion,
+                            onSwipeLeftNext = {
+                                WalkmanSoundEngine.playIfEnabled(mechanicalSounds, MechanicalSoundType.BUTTON_PRESS)
+                                swapController.triggerManualSwap(
+                                    currentDisplayedTrack = track,
+                                    swapDirection = CassetteSwapDirection.NEXT,
+                                    expectedNextTrack = resolveNeighborTrack(+1)
+                                ) {
+                                    playbackManager.skipToNext()
+                                }
+                            },
+                            onSwipeRightPrevious = {
+                                WalkmanSoundEngine.playIfEnabled(mechanicalSounds, MechanicalSoundType.BUTTON_PRESS)
+                                swapController.triggerManualSwap(
+                                    currentDisplayedTrack = track,
+                                    swapDirection = CassetteSwapDirection.PREVIOUS,
+                                    expectedNextTrack = resolveNeighborTrack(-1)
+                                ) {
+                                    playbackManager.skipToPrevious(forcePreviousTrack = true)
+                                }
+                            }
+                        )
+                ) {
+                    WalkmanBody(
+                        track = track,
+                        cassetteStyle = cassetteStyle,
+                        transportState = transportState,
+                        swapController = swapController,
+                        reelAngles = reelAngles,
+                        progressFraction = progressFraction,
+                        reducedMotion = reducedMotion,
+                        onRewind = {
+                            WalkmanSoundEngine.playIfEnabled(mechanicalSounds, MechanicalSoundType.BUTTON_PRESS)
+                            seekImpulseDirection = -1
+                            seekImpulseToken++
+                            playbackManager.seekBackward(10_000L)
+                        },
                     onPrevious = {
                         WalkmanSoundEngine.playIfEnabled(mechanicalSounds, MechanicalSoundType.BUTTON_PRESS)
                         if (queue.size > 1) {
@@ -269,15 +335,50 @@ fun PlayerContainer(
                             playbackManager.skipToNext()
                         }
                     },
-                    onFastForward = {
-                        WalkmanSoundEngine.playIfEnabled(mechanicalSounds, MechanicalSoundType.BUTTON_PRESS)
-                        seekImpulseDirection = 1
-                        seekImpulseToken++
-                        playbackManager.seekForward(10_000L)
-                    }
-                )
+                        onFastForward = {
+                            WalkmanSoundEngine.playIfEnabled(mechanicalSounds, MechanicalSoundType.BUTTON_PRESS)
+                            seekImpulseDirection = 1
+                            seekImpulseToken++
+                            playbackManager.seekForward(10_000L)
+                        }
+                    )
+                }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(14.dp))
+
+                if (transitionVisualState.isActive) {
+                    Surface(
+                        onClick = { showDjDeckSheet = true },
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFF17130A),
+                        border = BorderStroke(1.dp, WalkmanAccentGold),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 10.dp)
+                            .testTag("player_active_crossfade_banner")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "MIXING → ${transitionVisualState.incomingTrack?.title ?: "Next Track"} (${(transitionVisualState.progress * 100).toInt()}%)",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = WalkmanAccentGold,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = transitionVisualState.beatAlignmentNote,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFD1D5DB),
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
 
                 // Track Information, Progress Slider & Time Readout
                 PlaybackProgress(
@@ -296,7 +397,7 @@ fun PlayerContainer(
                     onToggleShuffle = { playbackManager.toggleShuffle() },
                     onOpenQueue = { showQueueSheet = true },
                     onOpenEqualizer = onNavigateToEqualizer,
-                    onOpenLyrics = { showLyricsSheet = true },
+                    onOpenLyrics = onOpenFullScreenLyrics,
                     onCycleRepeat = { playbackManager.cycleRepeatMode() }
                 )
 
@@ -331,7 +432,11 @@ fun PlayerContainer(
                 track = track,
                 currentPositionMs = positionMs,
                 onSeek = { playbackManager.seekTo(it) },
-                onClose = { showLyricsSheet = false }
+                onClose = { showLyricsSheet = false },
+                onOpenFullScreen = {
+                    showLyricsSheet = false
+                    onOpenFullScreenLyrics()
+                }
             )
         }
     }
@@ -348,10 +453,28 @@ fun PlayerContainer(
                 isPlaying = isPlaying,
                 onSelectTrack = { selected -> playbackManager.playTrack(selected, queue) },
                 onRemoveTrack = { idx -> playbackManager.removeFromQueue(idx) },
+                onUndoRemove = { idx, removedTrack -> playbackManager.insertTrackInQueue(idx, removedTrack) },
                 onMoveTrack = { from, to -> playbackManager.reorderQueue(from, to) },
                 onMoveToNext = { idx -> playbackManager.moveQueueItemToPlayNext(idx) },
                 onClearQueue = { playbackManager.clearQueue(keepCurrent = true) },
                 onClose = { showQueueSheet = false }
+            )
+        }
+    }
+
+    // Dual-Cassette DJ Crossfade Deck Sheet
+    if (showDjDeckSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showDjDeckSheet = false },
+            containerColor = Color.Black
+        ) {
+            DjCrossfadeDeckSheet(
+                playbackManager = playbackManager,
+                onOpenCrossfadeSettings = {
+                    showDjDeckSheet = false
+                    onOpenCrossfadeSettings()
+                },
+                onClose = { showDjDeckSheet = false }
             )
         }
     }

@@ -11,6 +11,15 @@ import com.example.sangeet.ui.components.ArtworkAnimationStyle
 import com.example.sangeet.ui.components.SpotlightTransitionDirection
 import com.example.sangeet.ui.components.SpotlightTransitionSpeed
 import com.example.sangeet.ui.components.SpotlightTransitionStyle
+import com.example.sangeet.ui.motion.MotionPreferencesSnapshot
+import com.example.sangeet.ui.motion.MotionQuality
+import com.example.sangeet.ui.motion.MotionSpeed
+import com.example.sangeet.ui.startup.StartupAnimationPreferencesSnapshot
+import com.example.sangeet.ui.startup.StartupAnimationSpeed
+import com.example.sangeet.ui.startup.StartupAnimationStyle
+import com.example.sangeet.playback.crossfade.CrossfadeMode
+import com.example.sangeet.playback.crossfade.CrossfadePreferencesSnapshot
+import com.example.sangeet.playback.crossfade.DjTransitionStyle
 import com.example.ui.theme.AccentColor
 import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.CoroutineScope
@@ -63,6 +72,51 @@ data class LastPlaybackSession(
     val positionMs: Long
 )
 
+data class UserProfileSnapshot(
+    val displayName: String = "SANGEET Listener",
+    val avatarUriOrPath: String = "",
+    val tagline: String = "Offline Walkman Collector",
+    val createdAtEpochMs: Long = 0L,
+    val showListeningStats: Boolean = true
+)
+
+enum class LyricsFontStyle(val label: String) {
+    SANS("Modern Sans"),
+    SERIF("Classic Serif"),
+    MONO("Tape Mono"),
+    DISPLAY("Studio Bold");
+
+    companion object {
+        fun fromString(value: String?): LyricsFontStyle {
+            return entries.find { it.name.equals(value, ignoreCase = true) } ?: SANS
+        }
+    }
+}
+
+enum class LyricsHighlightPreset(val label: String, val argbHex: Long) {
+    SANGEET_GOLD("SANGEET Gold", 0xFFE8B429L),
+    BRIGHT_AMBER("Bright Amber", 0xFFFFD666L),
+    WARM_IVORY("Warm Ivory", 0xFFF9FAFB),
+    COPPER_ORANGE("Copper Ember", 0xFFF59E0BL),
+    NEON_CYAN("Electric Cyan", 0xFF22D3EEL),
+    ROSE_GOLD("Rose Gold", 0xFFF472B6L),
+    EMERALD("Emerald Glow", 0xFF34D399L)
+}
+
+data class LyricsDisplayPreferencesSnapshot(
+    val fontSizeSp: Float = 19f,
+    val fontStyle: LyricsFontStyle = LyricsFontStyle.SANS,
+    val lineSpacingDp: Float = 18f,
+    val highlightColorHex: Long = LyricsHighlightPreset.SANGEET_GOLD.argbHex,
+    val inactiveOpacity: Float = 0.42f,
+    val artworkBlurRadius: Float = 18f,
+    val backgroundDimming: Float = 0.72f,
+    val currentLineScale: Float = 1.12f,
+    val autoScrollEnabled: Boolean = true,
+    val wordByWordEnabled: Boolean = true,
+    val reducedMotion: Boolean = false
+)
+
 class SettingsRepository(private val context: Context) {
 
     private val dataStore = context.dataStore
@@ -85,6 +139,15 @@ class SettingsRepository(private val context: Context) {
         val KEY_REPEAT_MODE = intPreferencesKey("repeat_mode")
         val KEY_PLAYBACK_SPEED = floatPreferencesKey("playback_speed")
         val KEY_CROSSFADE_SECONDS = intPreferencesKey("crossfade_seconds")
+        val KEY_CROSSFADE_MODE = stringPreferencesKey("crossfade_mode")
+        val KEY_CROSSFADE_AUTO_ENABLED = booleanPreferencesKey("crossfade_auto_enabled")
+        val KEY_CROSSFADE_EQUAL_POWER = booleanPreferencesKey("crossfade_equal_power")
+        val KEY_DJ_DURATION_SECONDS = intPreferencesKey("dj_duration_seconds")
+        val KEY_DJ_BEAT_SYNC = booleanPreferencesKey("dj_beat_sync")
+        val KEY_DJ_AUTO_BPM = booleanPreferencesKey("dj_auto_bpm")
+        val KEY_DJ_TRANSITION_STYLE = stringPreferencesKey("dj_transition_style")
+        val KEY_DJ_INCOMING_VOL = floatPreferencesKey("dj_incoming_volume")
+        val KEY_DJ_OUTGOING_VOL = floatPreferencesKey("dj_outgoing_volume")
         val KEY_GAPLESS_PLAYBACK = booleanPreferencesKey("gapless_playback")
         val KEY_SLEEP_TIMER_MINUTES = intPreferencesKey("sleep_timer_minutes")
 
@@ -109,8 +172,16 @@ class SettingsRepository(private val context: Context) {
 
         // Lyrics
         val KEY_LYRICS_FONT_SIZE = floatPreferencesKey("lyrics_font_size")
+        val KEY_LYRICS_FONT_STYLE = stringPreferencesKey("lyrics_font_style")
+        val KEY_LYRICS_LINE_SPACING = floatPreferencesKey("lyrics_line_spacing")
         val KEY_LYRICS_HIGHLIGHT_COLOR = longPreferencesKey("lyrics_highlight_color")
+        val KEY_LYRICS_INACTIVE_OPACITY = floatPreferencesKey("lyrics_inactive_opacity")
+        val KEY_LYRICS_ARTWORK_BLUR = floatPreferencesKey("lyrics_artwork_blur")
+        val KEY_LYRICS_BG_DIMMING = floatPreferencesKey("lyrics_bg_dimming")
+        val KEY_LYRICS_CURRENT_SCALE = floatPreferencesKey("lyrics_current_scale")
         val KEY_LYRICS_AUTO_SYNC = booleanPreferencesKey("lyrics_auto_sync")
+        val KEY_LYRICS_WORD_BY_WORD = booleanPreferencesKey("lyrics_word_by_word")
+        val KEY_LYRICS_REDUCED_MOTION = booleanPreferencesKey("lyrics_reduced_motion")
         val KEY_LYRICS_DISPLAY_MODE = stringPreferencesKey("lyrics_display_mode")
 
         // Library
@@ -159,6 +230,30 @@ class SettingsRepository(private val context: Context) {
         val KEY_SPOTLIGHT_TRANSITION_STYLE = stringPreferencesKey("spotlight_transition_style")
         val KEY_SPOTLIGHT_TRANSITION_SPEED = stringPreferencesKey("spotlight_transition_speed")
         val KEY_SPOTLIGHT_TRANSITION_DIRECTION = stringPreferencesKey("spotlight_transition_direction")
+
+        // Walkman Startup Animation Preferences
+        val KEY_STARTUP_ANIM_STYLE = stringPreferencesKey("startup_anim_style")
+        val KEY_STARTUP_ANIM_SPEED = stringPreferencesKey("startup_anim_speed")
+        val KEY_STARTUP_ANIM_SOUNDS = booleanPreferencesKey("startup_anim_sounds")
+        val KEY_STARTUP_ANIM_VIBRATION = booleanPreferencesKey("startup_anim_vibration")
+
+        // Global Motion & Gestures Preferences
+        val KEY_MOTION_QUALITY = stringPreferencesKey("motion_quality")
+        val KEY_MOTION_SPEED = stringPreferencesKey("motion_speed")
+        val KEY_MOTION_HORIZONTAL_SWIPES = booleanPreferencesKey("motion_horizontal_swipes")
+        val KEY_MOTION_VERTICAL_SWIPES = booleanPreferencesKey("motion_vertical_swipes")
+        val KEY_MOTION_PLAYER_GESTURES = booleanPreferencesKey("motion_player_gestures")
+        val KEY_MOTION_CASSETTE_TRANSITIONS = booleanPreferencesKey("motion_cassette_transitions")
+        val KEY_MOTION_SWIPE_DISMISS = booleanPreferencesKey("motion_swipe_dismiss")
+        val KEY_MOTION_REDUCED_MOTION = booleanPreferencesKey("motion_reduced_motion")
+        val KEY_MOTION_DISABLE_DECORATIVE = booleanPreferencesKey("motion_disable_decorative")
+
+        // Local User Profile Preferences
+        val KEY_PROFILE_DISPLAY_NAME = stringPreferencesKey("profile_display_name")
+        val KEY_PROFILE_AVATAR_PATH = stringPreferencesKey("profile_avatar_path")
+        val KEY_PROFILE_TAGLINE = stringPreferencesKey("profile_tagline")
+        val KEY_PROFILE_CREATED_AT = longPreferencesKey("profile_created_at")
+        val KEY_PROFILE_SHOW_STATS = booleanPreferencesKey("profile_show_stats")
 
         @Volatile
         private var INSTANCE: SettingsRepository? = null
@@ -211,9 +306,28 @@ class SettingsRepository(private val context: Context) {
     val shuffleEnabled: Flow<Boolean> = safePreferences.map { it[KEY_SHUFFLE] ?: false }
     val repeatMode: Flow<Int> = safePreferences.map { it[KEY_REPEAT_MODE] ?: 1 } // Player.REPEAT_MODE_ALL = 1
     val playbackSpeed: Flow<Float> = safePreferences.map { it[KEY_PLAYBACK_SPEED] ?: 1.0f }
-    val crossfadeSeconds: Flow<Int> = safePreferences.map { it[KEY_CROSSFADE_SECONDS] ?: 0 }
+    val crossfadeSeconds: Flow<Int> = safePreferences.map { it[KEY_CROSSFADE_SECONDS] ?: 5 }
     val gaplessPlayback: Flow<Boolean> = safePreferences.map { it[KEY_GAPLESS_PLAYBACK] ?: true }
     val sleepTimerMinutes: Flow<Int> = safePreferences.map { it[KEY_SLEEP_TIMER_MINUTES] ?: 30 }
+
+    val crossfadePreferences: Flow<CrossfadePreferencesSnapshot> = safePreferences.map { prefs ->
+        val legacySeconds = prefs[KEY_CROSSFADE_SECONDS]
+        val explicitMode = prefs[KEY_CROSSFADE_MODE]?.let { CrossfadeMode.fromString(it) }
+        val resolvedMode = explicitMode ?: if ((legacySeconds ?: 0) > 0) CrossfadeMode.ADVANCED else CrossfadeMode.OFF
+        val advDuration = (legacySeconds?.takeIf { it > 0 } ?: 5).coerceIn(1, 15)
+        CrossfadePreferencesSnapshot(
+            mode = resolvedMode,
+            autoCrossfadeEnabled = prefs[KEY_CROSSFADE_AUTO_ENABLED] ?: true,
+            advancedDurationSeconds = advDuration,
+            equalPowerCurvesEnabled = prefs[KEY_CROSSFADE_EQUAL_POWER] ?: true,
+            djDurationSeconds = (prefs[KEY_DJ_DURATION_SECONDS] ?: 8).coerceIn(4, 20),
+            djBeatSyncEnabled = prefs[KEY_DJ_BEAT_SYNC] ?: true,
+            djAutoBpmDetectionEnabled = prefs[KEY_DJ_AUTO_BPM] ?: true,
+            djTransitionStyle = DjTransitionStyle.fromString(prefs[KEY_DJ_TRANSITION_STYLE]),
+            djIncomingVolumeCap = (prefs[KEY_DJ_INCOMING_VOL] ?: 1.0f).coerceIn(0.2f, 1.0f),
+            djOutgoingVolumeCap = (prefs[KEY_DJ_OUTGOING_VOL] ?: 1.0f).coerceIn(0.2f, 1.0f)
+        ).sanitized()
+    }.distinctUntilChanged()
 
     // --- Equalizer Flows ---
     val eqEnabled: Flow<Boolean> = safePreferences.map { it[KEY_EQ_ENABLED] ?: true }
@@ -243,10 +357,28 @@ class SettingsRepository(private val context: Context) {
     val spatialManualAzimuth: Flow<Float> = safePreferences.map { it[KEY_SPATIAL_MANUAL_AZIMUTH] ?: 0f }
 
     // --- Lyrics Flows ---
-    val lyricsFontSize: Flow<Float> = safePreferences.map { it[KEY_LYRICS_FONT_SIZE] ?: 18f }
-    val lyricsHighlightColor: Flow<Long> = safePreferences.map { it[KEY_LYRICS_HIGHLIGHT_COLOR] ?: 0xFF00E5FF }
+    val lyricsFontSize: Flow<Float> = safePreferences.map { (it[KEY_LYRICS_FONT_SIZE] ?: 19f).coerceIn(14f, 30f) }
+    val lyricsHighlightColor: Flow<Long> = safePreferences.map {
+        it[KEY_LYRICS_HIGHLIGHT_COLOR] ?: LyricsHighlightPreset.SANGEET_GOLD.argbHex
+    }
     val lyricsAutoSync: Flow<Boolean> = safePreferences.map { it[KEY_LYRICS_AUTO_SYNC] ?: true }
     val lyricsDisplayMode: Flow<String> = safePreferences.map { it[KEY_LYRICS_DISPLAY_MODE] ?: "SYNCED" }
+
+    val lyricsPreferences: Flow<LyricsDisplayPreferencesSnapshot> = safePreferences.map { prefs ->
+        LyricsDisplayPreferencesSnapshot(
+            fontSizeSp = (prefs[KEY_LYRICS_FONT_SIZE] ?: 19f).coerceIn(14f, 30f),
+            fontStyle = LyricsFontStyle.fromString(prefs[KEY_LYRICS_FONT_STYLE]),
+            lineSpacingDp = (prefs[KEY_LYRICS_LINE_SPACING] ?: 18f).coerceIn(8f, 36f),
+            highlightColorHex = prefs[KEY_LYRICS_HIGHLIGHT_COLOR] ?: LyricsHighlightPreset.SANGEET_GOLD.argbHex,
+            inactiveOpacity = (prefs[KEY_LYRICS_INACTIVE_OPACITY] ?: 0.42f).coerceIn(0.15f, 0.85f),
+            artworkBlurRadius = (prefs[KEY_LYRICS_ARTWORK_BLUR] ?: 18f).coerceIn(0f, 30f),
+            backgroundDimming = (prefs[KEY_LYRICS_BG_DIMMING] ?: 0.72f).coerceIn(0.30f, 0.95f),
+            currentLineScale = (prefs[KEY_LYRICS_CURRENT_SCALE] ?: 1.12f).coerceIn(1.0f, 1.30f),
+            autoScrollEnabled = prefs[KEY_LYRICS_AUTO_SYNC] ?: true,
+            wordByWordEnabled = prefs[KEY_LYRICS_WORD_BY_WORD] ?: true,
+            reducedMotion = prefs[KEY_LYRICS_REDUCED_MOTION] ?: false
+        )
+    }.distinctUntilChanged()
 
     // --- Library Flows ---
     val sortOrder: Flow<String> = safePreferences.map { it[KEY_SORT_ORDER] ?: "TITLE" }
@@ -322,6 +454,56 @@ class SettingsRepository(private val context: Context) {
             spotlightTransitionStyle = spotlightStyle,
             spotlightTransitionSpeed = spotlightSpeed,
             spotlightTransitionDirection = spotlightDir
+        )
+    }.distinctUntilChanged()
+
+    // --- Walkman Startup Animation Flows ---
+    val startupAnimationPreferences: Flow<StartupAnimationPreferencesSnapshot> = safePreferences.map { prefs ->
+        val style = prefs[KEY_STARTUP_ANIM_STYLE]?.let {
+            try { StartupAnimationStyle.valueOf(it) } catch (_: Exception) { StartupAnimationStyle.FULL_WALKMAN }
+        } ?: StartupAnimationStyle.FULL_WALKMAN
+        val speed = prefs[KEY_STARTUP_ANIM_SPEED]?.let {
+            try { StartupAnimationSpeed.valueOf(it) } catch (_: Exception) { StartupAnimationSpeed.NORMAL }
+        } ?: StartupAnimationSpeed.NORMAL
+
+        StartupAnimationPreferencesSnapshot(
+            style = style,
+            speed = speed,
+            mechanicalSoundsEnabled = prefs[KEY_STARTUP_ANIM_SOUNDS] ?: false,
+            vibrationEnabled = prefs[KEY_STARTUP_ANIM_VIBRATION] ?: true
+        )
+    }.distinctUntilChanged()
+
+    // --- Global Motion & Gesture Flows ---
+    val motionPreferences: Flow<MotionPreferencesSnapshot> = safePreferences.map { prefs ->
+        val quality = prefs[KEY_MOTION_QUALITY]?.let {
+            try { MotionQuality.valueOf(it) } catch (_: Exception) { MotionQuality.FLUID }
+        } ?: MotionQuality.FLUID
+        val speed = prefs[KEY_MOTION_SPEED]?.let {
+            try { MotionSpeed.valueOf(it) } catch (_: Exception) { MotionSpeed.NORMAL }
+        } ?: MotionSpeed.NORMAL
+
+        MotionPreferencesSnapshot(
+            quality = quality,
+            speed = speed,
+            horizontalSwipesEnabled = prefs[KEY_MOTION_HORIZONTAL_SWIPES] ?: true,
+            verticalSwipesEnabled = prefs[KEY_MOTION_VERTICAL_SWIPES] ?: true,
+            playerGesturesEnabled = prefs[KEY_MOTION_PLAYER_GESTURES] ?: (prefs[KEY_GESTURES_ENABLED] ?: true),
+            cassetteTransitionsEnabled = prefs[KEY_MOTION_CASSETTE_TRANSITIONS] ?: true,
+            swipeToDismissEnabled = prefs[KEY_MOTION_SWIPE_DISMISS] ?: true,
+            reducedMotion = prefs[KEY_MOTION_REDUCED_MOTION] ?: false,
+            disableDecorativeAnimations = prefs[KEY_MOTION_DISABLE_DECORATIVE] ?: false
+        )
+    }.distinctUntilChanged()
+
+    // --- Local User Profile Flow ---
+    val userProfile: Flow<UserProfileSnapshot> = safePreferences.map { prefs ->
+        UserProfileSnapshot(
+            displayName = prefs[KEY_PROFILE_DISPLAY_NAME]?.takeIf { it.isNotBlank() } ?: "SANGEET Listener",
+            avatarUriOrPath = prefs[KEY_PROFILE_AVATAR_PATH] ?: "",
+            tagline = prefs[KEY_PROFILE_TAGLINE]?.takeIf { it.isNotBlank() } ?: "Offline Walkman Collector",
+            createdAtEpochMs = prefs[KEY_PROFILE_CREATED_AT] ?: 0L,
+            showListeningStats = prefs[KEY_PROFILE_SHOW_STATS] ?: true
         )
     }.distinctUntilChanged()
 
@@ -444,19 +626,68 @@ class SettingsRepository(private val context: Context) {
 
     // Lyrics
     suspend fun setLyricsFontSize(size: Float) {
-        dataStore.edit { it[KEY_LYRICS_FONT_SIZE] = size }
+        dataStore.edit { it[KEY_LYRICS_FONT_SIZE] = size.coerceIn(14f, 30f) }
+    }
+
+    suspend fun setLyricsFontStyle(style: LyricsFontStyle) {
+        dataStore.edit { it[KEY_LYRICS_FONT_STYLE] = style.name }
+    }
+
+    suspend fun setLyricsLineSpacing(spacingDp: Float) {
+        dataStore.edit { it[KEY_LYRICS_LINE_SPACING] = spacingDp.coerceIn(8f, 36f) }
     }
 
     suspend fun setLyricsHighlightColor(colorLong: Long) {
         dataStore.edit { it[KEY_LYRICS_HIGHLIGHT_COLOR] = colorLong }
     }
 
+    suspend fun setLyricsInactiveOpacity(opacity: Float) {
+        dataStore.edit { it[KEY_LYRICS_INACTIVE_OPACITY] = opacity.coerceIn(0.15f, 0.85f) }
+    }
+
+    suspend fun setLyricsArtworkBlur(radius: Float) {
+        dataStore.edit { it[KEY_LYRICS_ARTWORK_BLUR] = radius.coerceIn(0f, 30f) }
+    }
+
+    suspend fun setLyricsBackgroundDimming(dimming: Float) {
+        dataStore.edit { it[KEY_LYRICS_BG_DIMMING] = dimming.coerceIn(0.30f, 0.95f) }
+    }
+
+    suspend fun setLyricsCurrentLineScale(scale: Float) {
+        dataStore.edit { it[KEY_LYRICS_CURRENT_SCALE] = scale.coerceIn(1.0f, 1.30f) }
+    }
+
     suspend fun setLyricsAutoSync(enabled: Boolean) {
         dataStore.edit { it[KEY_LYRICS_AUTO_SYNC] = enabled }
     }
 
+    suspend fun setLyricsWordByWordEnabled(enabled: Boolean) {
+        dataStore.edit { it[KEY_LYRICS_WORD_BY_WORD] = enabled }
+    }
+
+    suspend fun setLyricsReducedMotion(enabled: Boolean) {
+        dataStore.edit { it[KEY_LYRICS_REDUCED_MOTION] = enabled }
+    }
+
     suspend fun setLyricsDisplayMode(mode: String) {
         dataStore.edit { it[KEY_LYRICS_DISPLAY_MODE] = mode }
+    }
+
+    suspend fun resetLyricsSettingsToDefault() {
+        dataStore.edit {
+            it.remove(KEY_LYRICS_FONT_SIZE)
+            it.remove(KEY_LYRICS_FONT_STYLE)
+            it.remove(KEY_LYRICS_LINE_SPACING)
+            it.remove(KEY_LYRICS_HIGHLIGHT_COLOR)
+            it.remove(KEY_LYRICS_INACTIVE_OPACITY)
+            it.remove(KEY_LYRICS_ARTWORK_BLUR)
+            it.remove(KEY_LYRICS_BG_DIMMING)
+            it.remove(KEY_LYRICS_CURRENT_SCALE)
+            it.remove(KEY_LYRICS_AUTO_SYNC)
+            it.remove(KEY_LYRICS_WORD_BY_WORD)
+            it.remove(KEY_LYRICS_REDUCED_MOTION)
+            it.remove(KEY_LYRICS_DISPLAY_MODE)
+        }
     }
 
     // Library
@@ -677,6 +908,197 @@ class SettingsRepository(private val context: Context) {
             it.remove(KEY_SPOTLIGHT_TRANSITION_SPEED)
             it.remove(KEY_SPOTLIGHT_TRANSITION_DIRECTION)
             it[KEY_ARTWORK_ANIMATION] = true
+        }
+    }
+
+    // --- Walkman Startup Animation Mutations ---
+
+    suspend fun setStartupAnimationStyle(style: StartupAnimationStyle) {
+        dataStore.edit { it[KEY_STARTUP_ANIM_STYLE] = style.name }
+    }
+
+    suspend fun setStartupAnimationSpeed(speed: StartupAnimationSpeed) {
+        dataStore.edit { it[KEY_STARTUP_ANIM_SPEED] = speed.name }
+    }
+
+    suspend fun setStartupAnimationSoundsEnabled(enabled: Boolean) {
+        dataStore.edit { it[KEY_STARTUP_ANIM_SOUNDS] = enabled }
+    }
+
+    suspend fun setStartupAnimationVibrationEnabled(enabled: Boolean) {
+        dataStore.edit { it[KEY_STARTUP_ANIM_VIBRATION] = enabled }
+    }
+
+    suspend fun resetStartupAnimationSettingsToDefault() {
+        dataStore.edit {
+            it.remove(KEY_STARTUP_ANIM_STYLE)
+            it.remove(KEY_STARTUP_ANIM_SPEED)
+            it.remove(KEY_STARTUP_ANIM_SOUNDS)
+            it.remove(KEY_STARTUP_ANIM_VIBRATION)
+        }
+    }
+
+    // --- Global Motion & Gesture Mutations ---
+
+    suspend fun setMotionQuality(quality: MotionQuality) {
+        dataStore.edit { it[KEY_MOTION_QUALITY] = quality.name }
+    }
+
+    suspend fun setMotionSpeed(speed: MotionSpeed) {
+        dataStore.edit { it[KEY_MOTION_SPEED] = speed.name }
+    }
+
+    suspend fun setMotionHorizontalSwipesEnabled(enabled: Boolean) {
+        dataStore.edit { it[KEY_MOTION_HORIZONTAL_SWIPES] = enabled }
+    }
+
+    suspend fun setMotionVerticalSwipesEnabled(enabled: Boolean) {
+        dataStore.edit { it[KEY_MOTION_VERTICAL_SWIPES] = enabled }
+    }
+
+    suspend fun setMotionPlayerGesturesEnabled(enabled: Boolean) {
+        dataStore.edit {
+            it[KEY_MOTION_PLAYER_GESTURES] = enabled
+            it[KEY_GESTURES_ENABLED] = enabled
+        }
+    }
+
+    suspend fun setMotionCassetteTransitionsEnabled(enabled: Boolean) {
+        dataStore.edit { it[KEY_MOTION_CASSETTE_TRANSITIONS] = enabled }
+    }
+
+    suspend fun setMotionSwipeToDismissEnabled(enabled: Boolean) {
+        dataStore.edit { it[KEY_MOTION_SWIPE_DISMISS] = enabled }
+    }
+
+    suspend fun setMotionReducedMotion(enabled: Boolean) {
+        dataStore.edit { it[KEY_MOTION_REDUCED_MOTION] = enabled }
+    }
+
+    suspend fun setMotionDisableDecorativeAnimations(enabled: Boolean) {
+        dataStore.edit { it[KEY_MOTION_DISABLE_DECORATIVE] = enabled }
+    }
+
+    suspend fun resetMotionSettingsToDefault() {
+        dataStore.edit {
+            it.remove(KEY_MOTION_QUALITY)
+            it.remove(KEY_MOTION_SPEED)
+            it.remove(KEY_MOTION_HORIZONTAL_SWIPES)
+            it.remove(KEY_MOTION_VERTICAL_SWIPES)
+            it.remove(KEY_MOTION_PLAYER_GESTURES)
+            it.remove(KEY_MOTION_CASSETTE_TRANSITIONS)
+            it.remove(KEY_MOTION_SWIPE_DISMISS)
+            it.remove(KEY_MOTION_REDUCED_MOTION)
+            it.remove(KEY_MOTION_DISABLE_DECORATIVE)
+            it.remove(KEY_GESTURES_ENABLED)
+        }
+    }
+
+    // --- Local User Profile Mutations ---
+
+    suspend fun ensureProfileInitialized(nowMs: Long = System.currentTimeMillis()) {
+        dataStore.edit { prefs ->
+            if ((prefs[KEY_PROFILE_CREATED_AT] ?: 0L) <= 0L) {
+                prefs[KEY_PROFILE_CREATED_AT] = nowMs
+            }
+        }
+    }
+
+    suspend fun setProfileDisplayName(name: String) {
+        val sanitized = name.trim().take(48).ifEmpty { "SANGEET Listener" }
+        dataStore.edit { prefs ->
+            prefs[KEY_PROFILE_DISPLAY_NAME] = sanitized
+            if ((prefs[KEY_PROFILE_CREATED_AT] ?: 0L) <= 0L) {
+                prefs[KEY_PROFILE_CREATED_AT] = System.currentTimeMillis()
+            }
+        }
+    }
+
+    suspend fun setProfileTagline(tagline: String) {
+        val sanitized = tagline.trim().take(80).ifEmpty { "Offline Walkman Collector" }
+        dataStore.edit { prefs ->
+            prefs[KEY_PROFILE_TAGLINE] = sanitized
+            if ((prefs[KEY_PROFILE_CREATED_AT] ?: 0L) <= 0L) {
+                prefs[KEY_PROFILE_CREATED_AT] = System.currentTimeMillis()
+            }
+        }
+    }
+
+    suspend fun setProfileAvatarPath(pathOrUri: String) {
+        dataStore.edit { prefs ->
+            prefs[KEY_PROFILE_AVATAR_PATH] = pathOrUri
+            if ((prefs[KEY_PROFILE_CREATED_AT] ?: 0L) <= 0L) {
+                prefs[KEY_PROFILE_CREATED_AT] = System.currentTimeMillis()
+            }
+        }
+    }
+
+    suspend fun setProfileShowListeningStats(show: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[KEY_PROFILE_SHOW_STATS] = show
+        }
+    }
+
+    // --- Crossfade & DJ Mixing Mutations ---
+
+    suspend fun setCrossfadeMode(mode: CrossfadeMode) {
+        dataStore.edit { prefs ->
+            prefs[KEY_CROSSFADE_MODE] = mode.name
+            if (mode == CrossfadeMode.ADVANCED && (prefs[KEY_CROSSFADE_SECONDS] ?: 0) <= 0) {
+                prefs[KEY_CROSSFADE_SECONDS] = 5
+            }
+        }
+    }
+
+    suspend fun setCrossfadeAutoEnabled(enabled: Boolean) {
+        dataStore.edit { it[KEY_CROSSFADE_AUTO_ENABLED] = enabled }
+    }
+
+    suspend fun setCrossfadeEqualPower(enabled: Boolean) {
+        dataStore.edit { it[KEY_CROSSFADE_EQUAL_POWER] = enabled }
+    }
+
+    suspend fun setDjDurationSeconds(seconds: Int) {
+        dataStore.edit { it[KEY_DJ_DURATION_SECONDS] = seconds.coerceIn(4, 20) }
+    }
+
+    suspend fun setDjBeatSyncEnabled(enabled: Boolean) {
+        dataStore.edit { it[KEY_DJ_BEAT_SYNC] = enabled }
+    }
+
+    suspend fun setDjAutoBpmDetectionEnabled(enabled: Boolean) {
+        dataStore.edit { it[KEY_DJ_AUTO_BPM] = enabled }
+    }
+
+    suspend fun setDjTransitionStyle(style: DjTransitionStyle, applyRecommendedDuration: Boolean = false) {
+        dataStore.edit {
+            it[KEY_DJ_TRANSITION_STYLE] = style.name
+            if (applyRecommendedDuration) {
+                it[KEY_DJ_DURATION_SECONDS] = style.recommendedDurationSeconds.coerceIn(4, 20)
+            }
+        }
+    }
+
+    suspend fun setDjIncomingVolume(volume: Float) {
+        dataStore.edit { it[KEY_DJ_INCOMING_VOL] = volume.coerceIn(0.2f, 1.0f) }
+    }
+
+    suspend fun setDjOutgoingVolume(volume: Float) {
+        dataStore.edit { it[KEY_DJ_OUTGOING_VOL] = volume.coerceIn(0.2f, 1.0f) }
+    }
+
+    suspend fun resetCrossfadeSettingsToDefault() {
+        dataStore.edit {
+            it.remove(KEY_CROSSFADE_MODE)
+            it.remove(KEY_CROSSFADE_AUTO_ENABLED)
+            it.remove(KEY_CROSSFADE_SECONDS)
+            it.remove(KEY_CROSSFADE_EQUAL_POWER)
+            it.remove(KEY_DJ_DURATION_SECONDS)
+            it.remove(KEY_DJ_BEAT_SYNC)
+            it.remove(KEY_DJ_AUTO_BPM)
+            it.remove(KEY_DJ_TRANSITION_STYLE)
+            it.remove(KEY_DJ_INCOMING_VOL)
+            it.remove(KEY_DJ_OUTGOING_VOL)
         }
     }
 

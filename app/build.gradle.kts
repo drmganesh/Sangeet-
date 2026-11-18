@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.sangeet.mzpka"
     minSdk = 26
     targetSdk = 36
-    versionCode = 6
-    versionName = "1.5.0"
+    versionCode = 7
+    versionName = "1.6.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -98,6 +98,7 @@ dependencies {
   implementation(libs.androidx.compose.ui.graphics)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
+  implementation(libs.androidx.core.splashscreen)
   implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)

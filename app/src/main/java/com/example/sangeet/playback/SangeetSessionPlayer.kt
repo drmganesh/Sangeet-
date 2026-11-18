@@ -18,7 +18,12 @@ import java.util.concurrent.CopyOnWriteArraySet
 @OptIn(UnstableApi::class)
 class SangeetSessionPlayer(
     private val exoPlayer: ExoPlayer,
-    initialPrefs: NotificationPreferencesSnapshot = NotificationPreferencesSnapshot()
+    initialPrefs: NotificationPreferencesSnapshot = NotificationPreferencesSnapshot(),
+    private val onPlayOverride: (() -> Unit)? = null,
+    private val onPauseOverride: (() -> Unit)? = null,
+    private val onNextOverride: (() -> Unit)? = null,
+    private val onPrevOverride: (() -> Unit)? = null,
+    private val onSeekOverride: ((Long) -> Unit)? = null
 ) : ForwardingPlayer(exoPlayer) {
 
     @Volatile
@@ -26,6 +31,34 @@ class SangeetSessionPlayer(
         private set
 
     private val sessionListeners = CopyOnWriteArraySet<Player.Listener>()
+
+    override fun play() {
+        onPlayOverride?.invoke() ?: super.play()
+    }
+
+    override fun pause() {
+        onPauseOverride?.invoke() ?: super.pause()
+    }
+
+    override fun seekToNext() {
+        onNextOverride?.invoke() ?: super.seekToNext()
+    }
+
+    override fun seekToNextMediaItem() {
+        onNextOverride?.invoke() ?: super.seekToNextMediaItem()
+    }
+
+    override fun seekToPrevious() {
+        onPrevOverride?.invoke() ?: super.seekToPrevious()
+    }
+
+    override fun seekToPreviousMediaItem() {
+        onPrevOverride?.invoke() ?: super.seekToPreviousMediaItem()
+    }
+
+    override fun seekTo(positionMs: Long) {
+        onSeekOverride?.invoke(positionMs) ?: super.seekTo(positionMs)
+    }
 
     fun updatePreferences(newPrefs: NotificationPreferencesSnapshot) {
         if (currentPrefs == newPrefs) return

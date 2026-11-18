@@ -1,7 +1,13 @@
 package com.example.sangeet.ui.screens
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -15,8 +21,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -30,9 +41,18 @@ import com.example.sangeet.data.repository.MediaRepository
 import com.example.sangeet.data.rules.RuleConflict
 import com.example.sangeet.playback.PlaybackManager
 import com.example.sangeet.ui.components.*
+import com.example.sangeet.ui.motion.LocalSangeetMotion
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+private enum class SearchCategoryFilter(val label: String) {
+    ALL("All"),
+    SONGS("Songs"),
+    ALBUMS("Albums"),
+    ARTISTS("Artists"),
+    PLAYLISTS("Playlists")
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun SearchScreen(
     playbackManager: PlaybackManager,
@@ -44,7 +64,12 @@ fun SearchScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val sangeetMotion = LocalSangeetMotion.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     var searchQuery by remember { mutableStateOf("") }
+    var activeFilter by remember { mutableStateOf(SearchCategoryFilter.ALL) }
+    val searchInteractionSource = remember { MutableInteractionSource() }
+    val isSearchFocused by searchInteractionSource.collectIsFocusedAsState()
 
     val recentSearches by repository.recentSearches.collectAsState(initial = emptyList())
     val searchResults by repository.searchTracks(searchQuery).collectAsState(initial = emptyList())
@@ -57,6 +82,17 @@ fun SearchScreen(
     val isPlaying by playbackManager.isPlaying.collectAsState()
     val isAppResumed by rememberIsAppResumed()
     var pendingConflict by remember { mutableStateOf<Pair<QuickRuleProposal, List<RuleConflict>>?>(null) }
+
+    val hideKeyboardNestedScroll = remember(keyboardController) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && available.y < -8f) {
+                    keyboardController?.hide()
+                }
+                return Offset.Zero
+            }
+        }
+    }
 
     val matchingAlbums = remember(searchQuery, allAlbums, allTracks) {
         if (searchQuery.isBlank()) {
@@ -115,11 +151,26 @@ fun SearchScreen(
         ) {
             Spacer(Modifier.height(12.dp))
 
-            // Cassette Search Bar Input
+            // Animated Cassette Search Bar Input with Focus Elevation & Accent Highlight
+            val barElevation by animateDpAsState(
+                targetValue = if (isSearchFocused && sangeetMotion.isMotionEnabled) 10.dp else 2.dp,
+                animationSpec = sangeetMotion.durationTween(180),
+                label = "searchBarElevation"
+            )
+            val barBorderColor by animateColorAsState(
+                targetValue = if (isSearchFocused) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.40f)
+                },
+                animationSpec = sangeetMotion.durationTween(180),
+                label = "searchBarBorder"
+            )
             Surface(
                 shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isSearchFocused) 0.92f else 0.75f),
+                border = BorderStroke(if (isSearchFocused) 1.4.dp else 1.dp, barBorderColor),
+                shadowElevation = barElevation,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 OutlinedTextField(
@@ -130,6 +181,7 @@ fun SearchScreen(
                             coroutineScope.launch { repository.recordSearch(it) }
                         }
                     },
+                    interactionSource = searchInteractionSource,
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("search_input_field"),
@@ -159,7 +211,24 @@ fun SearchScreen(
                 )
             }
 
-            Spacer(Modifier.height(14.dp))
+            if (searchQuery.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    items(SearchCategoryFilter.entries) { filter ->
+                        FilterChip(
+                            selected = activeFilter == filter,
+                            onClick = { activeFilter = filter },
+                            label = { Text(filter.label) },
+                            modifier = Modifier.testTag("search_filter_${filter.name.lowercase()}")
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
 
             // Recent searches tape chips
             if (searchQuery.isEmpty() && recentSearches.isNotEmpty()) {
@@ -226,12 +295,26 @@ fun SearchScreen(
                         )
                     }
                 } else {
+                    AnimatedContent(
+                        targetState = activeFilter,
+                        transitionSpec = {
+                            val dir = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+                            sangeetMotion.tabTransitionSpec<SearchCategoryFilter>(dir)
+                        },
+                        label = "search_category_content"
+                    ) { filter ->
+                    val showAlbums = matchingAlbums.isNotEmpty() && (filter == SearchCategoryFilter.ALL || filter == SearchCategoryFilter.ALBUMS)
+                    val showArtists = matchingArtists.isNotEmpty() && (filter == SearchCategoryFilter.ALL || filter == SearchCategoryFilter.ARTISTS)
+                    val showPlaylists = matchingPlaylists.isNotEmpty() && (filter == SearchCategoryFilter.ALL || filter == SearchCategoryFilter.PLAYLISTS)
+                    val showSongs = searchResults.isNotEmpty() && (filter == SearchCategoryFilter.ALL || filter == SearchCategoryFilter.SONGS)
+
                     LazyColumn(
+                        modifier = Modifier.nestedScroll(hideKeyboardNestedScroll),
                         contentPadding = PaddingValues(bottom = 120.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         // 1. Albums (Cassette Cards)
-                        if (matchingAlbums.isNotEmpty()) {
+                        if (showAlbums) {
                             item {
                                 CassetteSectionHeader(
                                     title = "Albums",
@@ -283,7 +366,7 @@ fun SearchScreen(
                         }
 
                         // 2. Artists (Normal Circular Artwork inside Cassette Cards — NOT cassettes)
-                        if (matchingArtists.isNotEmpty()) {
+                        if (showArtists) {
                             item {
                                 CassetteSectionHeader(
                                     title = "Artists",
@@ -350,7 +433,7 @@ fun SearchScreen(
                         }
 
                         // 3. Playlists (Cassette Collection Cards)
-                        if (matchingPlaylists.isNotEmpty()) {
+                        if (showPlaylists) {
                             item {
                                 CassetteSectionHeader(
                                     title = "Playlists",
@@ -410,7 +493,7 @@ fun SearchScreen(
                         }
 
                         // 4. Songs (Compact Miniature Cassette Rows)
-                        if (searchResults.isNotEmpty()) {
+                        if (showSongs) {
                             item {
                                 CassetteSectionHeader(
                                     title = "Songs",
@@ -429,6 +512,7 @@ fun SearchScreen(
                                 Surface(
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        .animateItem(placementSpec = sangeetMotion.intOffsetSpring())
                                         .clip(RoundedCornerShape(14.dp))
                                         .clickable { playbackManager.playTrack(track, searchResults) },
                                     color = if (isCurrent) {
@@ -566,6 +650,7 @@ fun SearchScreen(
                                 }
                             }
                         }
+                    }
                     }
                 }
             } else {

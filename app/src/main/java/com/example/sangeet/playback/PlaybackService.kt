@@ -66,7 +66,12 @@ class PlaybackService : MediaSessionService() {
 
         sessionPlayer = SangeetSessionPlayer(
             exoPlayer = playbackManager.getPlayer(),
-            initialPrefs = initialPrefs
+            initialPrefs = initialPrefs,
+            onPlayOverride = { playbackManager.play() },
+            onPauseOverride = { playbackManager.pause() },
+            onNextOverride = { playbackManager.skipToNext() },
+            onPrevOverride = { playbackManager.skipToPrevious() },
+            onSeekOverride = { posMs -> playbackManager.seekTo(posMs) }
         )
 
         val launchIntent = Intent(this, MainActivity::class.java).apply {
@@ -87,6 +92,24 @@ class PlaybackService : MediaSessionService() {
             .setCallback(SangeetSessionCallback())
             .setCustomLayout(notificationProvider.buildSessionCustomLayout(initialPrefs))
             .build()
+
+        playbackManager.onActivePlayerSwapped = { newActiveExo ->
+            val activeSession = mediaSession
+            if (activeSession != null) {
+                val updatedSessionPlayer = SangeetSessionPlayer(
+                    exoPlayer = newActiveExo,
+                    initialPrefs = sessionPlayer.currentPrefs,
+                    onPlayOverride = { playbackManager.play() },
+                    onPauseOverride = { playbackManager.pause() },
+                    onNextOverride = { playbackManager.skipToNext() },
+                    onPrevOverride = { playbackManager.skipToPrevious() },
+                    onSeekOverride = { posMs -> playbackManager.seekTo(posMs) }
+                )
+                sessionPlayer = updatedSessionPlayer
+                activeSession.player = updatedSessionPlayer
+                onUpdateNotification(activeSession)
+            }
+        }
 
         activeServiceInstance = this
         observeNotificationPreferences()
@@ -173,6 +196,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        playbackManager.onActivePlayerSwapped = null
         if (activeServiceInstance === this) {
             activeServiceInstance = null
         }

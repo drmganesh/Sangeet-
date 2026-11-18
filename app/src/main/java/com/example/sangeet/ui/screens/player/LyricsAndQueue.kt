@@ -4,8 +4,11 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
@@ -48,6 +51,7 @@ fun LyricsSheetContent(
     currentPositionMs: Long,
     onSeek: (Long) -> Unit,
     onClose: () -> Unit,
+    onOpenFullScreen: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -56,25 +60,20 @@ fun LyricsSheetContent(
     val lyricsManager = remember { LyricsManager(context) }
     val settingsRepo = remember { SettingsRepository.getInstance(context) }
 
-    val persistedFontSize by settingsRepo.lyricsFontSize.collectAsState(initial = 18f)
+    val persistedFontSize by settingsRepo.lyricsFontSize.collectAsState(initial = 19f)
 
     var rawLyricsText by remember { mutableStateOf("") }
     var timingOffsetMs by remember { mutableLongStateOf(0L) }
-    var isLoaded by remember { mutableStateOf(false) }
-
-    var showEditDialog by remember { mutableStateOf(false) }
-    var editText by remember { mutableStateOf("") }
 
     // Resolve lyrics from DB/embedded/sibling files
     LaunchedEffect(track.id) {
-        val (lyrics, offset) = lyricsManager.resolveLyrics(track)
-        rawLyricsText = lyrics
-        timingOffsetMs = offset
-        isLoaded = true
+        val resolved = lyricsManager.resolveLyricsDetailed(track)
+        rawLyricsText = resolved.rawContent
+        timingOffsetMs = resolved.offsetMs
     }
 
     val filePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
+        contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
             coroutineScope.launch {
@@ -90,21 +89,26 @@ fun LyricsSheetContent(
         }
     }
 
-    val effectivePosition = currentPositionMs + timingOffsetMs
-    val lyricsLines = remember(rawLyricsText, timingOffsetMs) {
-        lyricsManager.parseLyrics(rawLyricsText, timingOffsetMs)
-    }
+    var showEditDialog by remember { mutableStateOf(false) }
+    var editText by remember { mutableStateOf("") }
 
-    val currentLineIndex = remember(lyricsLines, effectivePosition) {
-        val idx = lyricsLines.indexOfLast { it.timestampMs <= effectivePosition }
-        if (idx == -1) 0 else idx
+    val parsedDoc = remember(track.id, rawLyricsText) {
+        lyricsManager.getOrParseDocument(track.id, rawLyricsText)
+    }
+    val lyricsLines = parsedDoc.lines
+
+    val currentLineIndex = remember(lyricsLines, currentPositionMs, timingOffsetMs) {
+        val active = com.example.sangeet.scanner.LyricsSyncEngine.findActiveLineIndex(
+            lines = lyricsLines,
+            playbackPositionMs = currentPositionMs,
+            offsetMs = timingOffsetMs
+        )
+        if (active == -1) 0 else active
     }
 
     LaunchedEffect(currentLineIndex) {
-        if (lyricsLines.isNotEmpty() && currentLineIndex in lyricsLines.indices) {
-            coroutineScope.launch {
-                listState.animateScrollToItem((currentLineIndex - 2).coerceAtLeast(0))
-            }
+        if (lyricsLines.isNotEmpty() && currentLineIndex in lyricsLines.indices && parsedDoc.isSynchronized) {
+            listState.animateScrollToItem((currentLineIndex - 2).coerceAtLeast(0))
         }
     }
 
@@ -132,13 +136,21 @@ fun LyricsSheetContent(
                 )
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
+                if (onOpenFullScreen != null) {
+                    IconButton(
+                        onClick = onOpenFullScreen,
+                        modifier = Modifier.testTag("lyrics_sheet_expand_btn")
+                    ) {
+                        Icon(Icons.Rounded.OpenInFull, contentDescription = "Open Full-Screen Lyrics", tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
                 IconButton(onClick = {
                     editText = rawLyricsText
                     showEditDialog = true
                 }) {
                     Icon(Icons.Rounded.Edit, contentDescription = "Edit Lyrics", tint = MaterialTheme.colorScheme.primary)
                 }
-                IconButton(onClick = { filePicker.launch("*/*") }) {
+                IconButton(onClick = { filePicker.launch(arrayOf("text/*", "application/octet-stream", "*/*")) }) {
                     Icon(Icons.Rounded.FileUpload, contentDescription = "Import .LRC File", tint = MaterialTheme.colorScheme.primary)
                 }
                 IconButton(onClick = onClose) {
@@ -157,46 +169,46 @@ fun LyricsSheetContent(
         ) {
             FilledTonalIconButton(
                 onClick = {
-                    timingOffsetMs -= 500L
+                    timingOffsetMs = com.example.sangeet.scanner.LyricsSyncEngine.clampOffset(timingOffsetMs - 250L)
                     coroutineScope.launch { lyricsManager.updateLyricsOffset(track.id, timingOffsetMs) }
                 },
-                modifier = Modifier.size(40.dp)
+                modifier = Modifier.size(44.dp)
             ) {
-                Text("-0.5s", style = MaterialTheme.typography.labelSmall)
+                Text("-250", style = MaterialTheme.typography.labelSmall)
             }
             Spacer(modifier = Modifier.width(6.dp))
             FilledTonalIconButton(
                 onClick = {
-                    timingOffsetMs -= 100L
+                    timingOffsetMs = com.example.sangeet.scanner.LyricsSyncEngine.clampOffset(timingOffsetMs - 50L)
                     coroutineScope.launch { lyricsManager.updateLyricsOffset(track.id, timingOffsetMs) }
                 },
-                modifier = Modifier.size(40.dp)
+                modifier = Modifier.size(44.dp)
             ) {
-                Text("-0.1s", style = MaterialTheme.typography.labelSmall)
+                Text("-50", style = MaterialTheme.typography.labelSmall)
             }
-            Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(8.dp))
             CassetteHeaderBadge(
-                text = "SYNC ${if (timingOffsetMs >= 0) "+" else ""}${timingOffsetMs / 1000f}s"
+                text = "SYNC ${if (timingOffsetMs >= 0) "+" else ""}${timingOffsetMs}ms"
             )
-            Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(8.dp))
             FilledTonalIconButton(
                 onClick = {
-                    timingOffsetMs += 100L
+                    timingOffsetMs = com.example.sangeet.scanner.LyricsSyncEngine.clampOffset(timingOffsetMs + 50L)
                     coroutineScope.launch { lyricsManager.updateLyricsOffset(track.id, timingOffsetMs) }
                 },
-                modifier = Modifier.size(40.dp)
+                modifier = Modifier.size(44.dp)
             ) {
-                Text("+0.1s", style = MaterialTheme.typography.labelSmall)
+                Text("+50", style = MaterialTheme.typography.labelSmall)
             }
             Spacer(modifier = Modifier.width(6.dp))
             FilledTonalIconButton(
                 onClick = {
-                    timingOffsetMs += 500L
+                    timingOffsetMs = com.example.sangeet.scanner.LyricsSyncEngine.clampOffset(timingOffsetMs + 250L)
                     coroutineScope.launch { lyricsManager.updateLyricsOffset(track.id, timingOffsetMs) }
                 },
-                modifier = Modifier.size(40.dp)
+                modifier = Modifier.size(44.dp)
             ) {
-                Text("+0.5s", style = MaterialTheme.typography.labelSmall)
+                Text("+250", style = MaterialTheme.typography.labelSmall)
             }
         }
 
@@ -212,9 +224,9 @@ fun LyricsSheetContent(
                 CassetteEmptyStateCard(
                     icon = Icons.Rounded.MusicOff,
                     title = "No Offline Lyrics Found",
-                    subtitle = "Place a matching .lrc or .txt file in the folder, or tap below to pick a local lyrics file.",
+                    subtitle = "Place a matching .lrc or .txt file in the folder, or open Full-Screen Lyrics to search locally.",
                     action = {
-                        Button(onClick = { filePicker.launch("*/*") }) {
+                        Button(onClick = { filePicker.launch(arrayOf("text/*", "application/octet-stream", "*/*")) }) {
                             Icon(Icons.Rounded.FolderOpen, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
                             Text("Pick .LRC File")
@@ -229,7 +241,7 @@ fun LyricsSheetContent(
                 contentPadding = PaddingValues(vertical = 32.dp)
             ) {
                 itemsIndexed(lyricsLines) { index, line ->
-                    val isCurrent = index == currentLineIndex
+                    val isCurrent = parsedDoc.isSynchronized && index == currentLineIndex
                     val textColor by animateColorAsState(
                         targetValue = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
                         label = "lyricColor"
@@ -239,7 +251,16 @@ fun LyricsSheetContent(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 8.dp)
-                            .clickable { onSeek(line.timestampMs) },
+                            .clickable {
+                                if (parsedDoc.isSynchronized) {
+                                    onSeek(
+                                        com.example.sangeet.scanner.LyricsSyncEngine.effectiveLineTimestamp(
+                                            line.timestampMs,
+                                            timingOffsetMs
+                                        )
+                                    )
+                                }
+                            },
                         color = Color.Transparent
                     ) {
                         Text(
@@ -300,6 +321,7 @@ fun LyricsSheetContent(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun QueueSheetContent(
     queue: List<AudioTrack>,
@@ -307,28 +329,35 @@ fun QueueSheetContent(
     isPlaying: Boolean = false,
     onSelectTrack: (AudioTrack) -> Unit,
     onRemoveTrack: (Int) -> Unit,
+    onUndoRemove: (Int, AudioTrack) -> Unit = { _, _ -> },
     onMoveTrack: (Int, Int) -> Unit = { _, _ -> },
     onMoveToNext: (Int) -> Unit = {},
     onClearQueue: () -> Unit = {},
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val sangeetMotion = com.example.sangeet.ui.motion.LocalSangeetMotion.current
     val density = LocalDensity.current
     val itemStepPx = with(density) { 68.dp.toPx() }
     var draggingIndex by remember { mutableStateOf<Int?>(null) }
     var dragOffsetY by remember { mutableFloatStateOf(0f) }
+    var lastRemovedItem by remember { mutableStateOf<Pair<Int, AudioTrack>?>(null) }
 
     val currentQueueIdx = remember(queue, currentTrack?.id) {
         queue.indexOfFirst { it.id == currentTrack?.id }
     }
 
-    Column(
+    Box(
         modifier = modifier
             .fillMaxWidth()
             .fillMaxHeight(0.86f)
-            .padding(horizontal = 20.dp, vertical = 12.dp)
             .testTag("queue_sheet_content")
     ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 20.dp, vertical = 12.dp)
+        ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -451,7 +480,7 @@ fun QueueSheetContent(
 
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 24.dp),
+                contentPadding = PaddingValues(bottom = if (lastRemovedItem != null) 88.dp else 24.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 itemsIndexed(queue, key = { index, t -> "${t.id}_$index" }) { index, track ->
@@ -462,18 +491,65 @@ fun QueueSheetContent(
                         isActivelyPlayingAndVisible = spin,
                         seedAngleDegrees = ((track.id * 43L) % 360L).toFloat()
                     )
+                    var dismissedThisRow by remember(track.id, index) { mutableStateOf(false) }
+                    val dismissState = rememberSwipeToDismissBoxState(
+                        confirmValueChange = { value ->
+                            if (value == SwipeToDismissBoxValue.EndToStart && !dismissedThisRow) {
+                                dismissedThisRow = true
+                                lastRemovedItem = index to track
+                                onRemoveTrack(index)
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                    )
 
-                    Surface(
+                    SwipeToDismissBox(
+                        state = dismissState,
+                        enableDismissFromStartToEnd = false,
+                        enableDismissFromEndToStart = sangeetMotion.allowSwipeToDismiss && queue.size > 1 && !isDragging,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .zIndex(if (isDragging) 2f else 0f)
-                            .graphicsLayer {
-                                translationY = if (isDragging) dragOffsetY else 0f
-                                scaleX = if (isDragging) 1.02f else 1f
-                                scaleY = if (isDragging) 1.02f else 1f
+                            .animateItem(
+                                placementSpec = sangeetMotion.intOffsetSpring()
+                            )
+                            .zIndex(if (isDragging) 2f else 0f),
+                        backgroundContent = {
+                            val bgColor by animateColorAsState(
+                                targetValue = if (dismissState.targetValue == SwipeToDismissBoxValue.EndToStart) {
+                                    MaterialTheme.colorScheme.errorContainer
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                                },
+                                label = "queueSwipeBg"
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(bgColor)
+                                    .padding(horizontal = 20.dp),
+                                contentAlignment = Alignment.CenterEnd
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.DeleteSweep,
+                                    contentDescription = "Swipe to remove",
+                                    tint = MaterialTheme.colorScheme.onErrorContainer
+                                )
                             }
-                            .clip(RoundedCornerShape(14.dp))
-                            .clickable { onSelectTrack(track) },
+                        }
+                    ) {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .graphicsLayer {
+                                    translationY = if (isDragging) dragOffsetY else 0f
+                                    scaleX = if (isDragging) 1.02f else 1f
+                                    scaleY = if (isDragging) 1.02f else 1f
+                                }
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { onSelectTrack(track) },
                         shape = RoundedCornerShape(14.dp),
                         color = when {
                             isDragging -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
@@ -578,7 +654,10 @@ fun QueueSheetContent(
                             }
 
                             IconButton(
-                                onClick = { onRemoveTrack(index) },
+                                onClick = {
+                                    lastRemovedItem = index to track
+                                    onRemoveTrack(index)
+                                },
                                 modifier = Modifier.size(38.dp)
                             ) {
                                 Icon(
@@ -588,6 +667,56 @@ fun QueueSheetContent(
                                     modifier = Modifier.size(19.dp)
                                 )
                             }
+                        }
+                    }
+                    }
+                }
+            }
+        }
+        }
+
+        AnimatedVisibility(
+            visible = lastRemovedItem != null,
+            enter = sangeetMotion.miniPlayerEnter(),
+            exit = sangeetMotion.miniPlayerExit(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(horizontal = 20.dp, vertical = 14.dp)
+        ) {
+            val item = lastRemovedItem
+            if (item != null) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.inverseSurface,
+                    shadowElevation = 8.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("queue_undo_banner")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Removed \"${item.second.title}\"",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.inverseOnSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(
+                            onClick = {
+                                onUndoRemove(item.first, item.second)
+                                lastRemovedItem = null
+                            },
+                            modifier = Modifier.testTag("queue_undo_btn")
+                        ) {
+                            Text(
+                                text = "UNDO",
+                                fontWeight = FontWeight.Black,
+                                color = MaterialTheme.colorScheme.primary
+                            )
                         }
                     }
                 }
